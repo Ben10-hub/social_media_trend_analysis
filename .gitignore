@@ -1,0 +1,7 @@
+.venv/
+.nltk_data/
+.mplconfig/
+__pycache__/
+*.pyc
+.DS_Store
+
