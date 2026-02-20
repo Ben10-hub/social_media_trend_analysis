@@ -6,3 +6,6 @@ scikit-learn
 gensim
 nltk
 wordcloud
+python-dotenv
+praw
+tweepy

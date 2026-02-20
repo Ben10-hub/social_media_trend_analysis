@@ -3,6 +3,7 @@ import os
 import re
 import string
 from collections import Counter
+from pathlib import Path
 
 # Ensure Matplotlib uses a writable config/cache directory in restricted environments.
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -17,6 +18,17 @@ from gensim import corpora
 from gensim.models.ldamodel import LdaModel
 from sklearn.feature_extraction.text import TfidfVectorizer
 from wordcloud import WordCloud
+
+# Optional: adapters and data store for multi-platform / real-time features
+try:
+    from adapters.csv_adapter import load_csv_unified
+    from adapters.reddit_adapter import fetch_reddit_posts
+    from adapters.twitter_adapter import fetch_twitter_posts
+    from data_store import append_posts, get_db_path, load_all_posts
+    from time_analysis import compute_trends_over_time, trend_growth_rate
+    _HAS_ADAPTERS = True
+except ImportError:
+    _HAS_ADAPTERS = False
 
 
 def safe_word_tokenize(text: str) -> list[str]:
@@ -330,44 +342,147 @@ def main():
 
     with st.sidebar:
         st.title("Controls")
-        st.caption("Upload a CSV with a `text` column.")
+        st.caption("Choose data source or upload a CSV with a text column.")
         dark_mode = st.toggle("Dark mode", value=False)
         apply_theme(dark_mode)
 
         top_n = st.slider("Number of trends", min_value=5, max_value=50, value=15, step=1)
         lda_topics_n = st.slider("LDA topics", min_value=2, max_value=12, value=5, step=1)
         lda_passes = st.slider("LDA passes", min_value=5, max_value=30, value=10, step=1)
+        time_interval = st.selectbox("Time grouping", options=["hour", "minute"], index=0)
 
-        uploaded = st.file_uploader("Upload CSV", type=["csv"])
-        use_sample = st.checkbox("Use sample dataset", value=uploaded is None)
+        data_source = st.radio(
+            "Data source",
+            ["Sample", "Upload CSV", "Load from collected", "Fetch Reddit", "Fetch Twitter"],
+            index=0,
+        )
+        uploaded = st.file_uploader("Upload CSV", type=["csv"]) if data_source == "Upload CSV" else None
 
     st.title("Hybrid Social Media Trend & Sentiment Analysis")
-    st.caption("Trends (hashtags/keywords/TF‑IDF/LDA) + Sentiment (VADER) in an interactive dashboard.")
+    st.caption("Trends (hashtags/keywords/TF‑IDF/LDA) + Sentiment (VADER) + Real-time & time-based analytics.")
 
     df = None
-    if uploaded is not None:
-        df = load_csv(uploaded.getvalue())
-    elif use_sample:
+    err_msg = None
+
+    if data_source == "Sample":
         try:
-            df = pd.read_csv("data/sample_social_posts.csv")
-        except Exception:
-            df = None
+            sample_path = Path(__file__).resolve().parent / "data" / "sample_social_posts.csv"
+            if _HAS_ADAPTERS:
+                df = load_csv_unified(file_path=str(sample_path), platform_default="sample")
+            else:
+                df = pd.read_csv(sample_path)
+                df["platform"] = "sample"
+                df["timestamp"] = df["created_at"].astype(str) if "created_at" in df.columns else pd.Timestamp.utcnow().isoformat()
+                df["text"] = df["text"].astype(str)
+        except Exception as e:
+            err_msg = str(e)
+    elif data_source == "Upload CSV":
+        if uploaded is not None:
+            try:
+                if _HAS_ADAPTERS:
+                    df = load_csv_unified(file_bytes=uploaded.getvalue(), platform_default="csv")
+                else:
+                    df = load_csv(uploaded.getvalue())
+                    df["platform"] = "csv"
+                    df["timestamp"] = pd.Timestamp.utcnow().isoformat()
+                    text_col = infer_text_column([c for c in df.columns if df[c].dtype == "object"] or list(df.columns))
+                    if text_col:
+                        df["text"] = df[text_col].astype(str)
+            except Exception as e:
+                err_msg = str(e)
+        else:
+            st.info("Upload a CSV file.")
+            st.stop()
+    elif data_source == "Load from collected":
+        if _HAS_ADAPTERS:
+            try:
+                df = load_all_posts()
+                if df is None or df.empty:
+                    st.warning("No collected data yet. Use Collect Now or run collect_real_time.py.")
+                    st.info("Falling back to sample dataset.")
+                    sample_path = Path(__file__).resolve().parent / "data" / "sample_social_posts.csv"
+                    df = load_csv_unified(file_path=str(sample_path), platform_default="sample")
+                else:
+                    pass
+            except Exception as e:
+                err_msg = str(e)
+                st.warning(f"Error loading collected data: {e}. Using sample dataset.")
+                sample_path = Path(__file__).resolve().parent / "data" / "sample_social_posts.csv"
+                df = load_csv_unified(file_path=str(sample_path), platform_default="sample")
+        else:
+            st.warning("Collectors not available. Use sample or upload.")
+            st.stop()
+    elif data_source == "Fetch Reddit":
+        if _HAS_ADAPTERS:
+            with st.spinner("Fetching from Reddit..."):
+                df, err = fetch_reddit_posts(subreddits=["python", "technology"], limit_per_sub=30)
+            if err:
+                st.warning(f"Reddit API: {err}. Using sample dataset.")
+                sample_path = Path(__file__).resolve().parent / "data" / "sample_social_posts.csv"
+                df = load_csv_unified(file_path=str(sample_path), platform_default="sample")
+            elif df is None or df.empty:
+                st.warning("No Reddit posts returned. Using sample dataset.")
+                sample_path = Path(__file__).resolve().parent / "data" / "sample_social_posts.csv"
+                df = load_csv_unified(file_path=str(sample_path), platform_default="sample")
+        else:
+            st.warning("Reddit adapter not available. Use sample or upload.")
+            st.stop()
+    elif data_source == "Fetch Twitter":
+        if _HAS_ADAPTERS:
+            with st.spinner("Fetching from Twitter..."):
+                df, err = fetch_twitter_posts(query="AI OR machine learning", max_results=50)
+            if err:
+                st.warning(f"Twitter API: {err}. Using sample dataset.")
+                sample_path = Path(__file__).resolve().parent / "data" / "sample_social_posts.csv"
+                df = load_csv_unified(file_path=str(sample_path), platform_default="sample")
+            elif df is None or df.empty:
+                st.warning("No tweets returned. Using sample dataset.")
+                sample_path = Path(__file__).resolve().parent / "data" / "sample_social_posts.csv"
+                df = load_csv_unified(file_path=str(sample_path), platform_default="sample")
+        else:
+            st.warning("Twitter adapter not available. Use sample or upload.")
+            st.stop()
 
     if df is None:
+        st.error(err_msg or "No data loaded.")
         st.info("Upload a CSV or enable the sample dataset.")
         st.stop()
 
-    candidate_cols = [c for c in df.columns if df[c].dtype == "object"] or list(df.columns)
-    inferred = infer_text_column(candidate_cols)
-    if inferred is None:
-        st.error("Could not find a text column. Please ensure your CSV has a text-like column (e.g., `text`, `clean_text`, `clean_comment`).")
-        st.stop()
+    if "text" not in df.columns:
+        candidate_cols = [c for c in df.columns if df[c].dtype == "object"] or list(df.columns)
+        inferred = infer_text_column(candidate_cols)
+        if inferred is None:
+            st.error("Could not find a text column.")
+            st.stop()
+        df = df.copy()
+        df["text"] = df[inferred].astype(str)
+    else:
+        df = df.copy()
+        df["text"] = df["text"].astype(str)
 
-    with st.sidebar:
-        text_col = st.selectbox("Text column", options=candidate_cols, index=candidate_cols.index(inferred))
+    if "platform" not in df.columns:
+        df["platform"] = data_source.lower().replace(" ", "_")
+    if "timestamp" not in df.columns:
+        df["timestamp"] = pd.Timestamp.utcnow().isoformat()
 
-    df = df.copy()
-    df["text"] = df[text_col].astype(str)
+    # Real-time collection controls (sidebar)
+    if _HAS_ADAPTERS:
+        with st.sidebar:
+            st.divider()
+            st.subheader("Real-time collection")
+            if st.button("Collect Now", help="Fetch Reddit posts and append to SQLite"):
+                with st.spinner("Fetching..."):
+                    rdf, err = fetch_reddit_posts(subreddits=["python", "technology"], limit_per_sub=25)
+                if err:
+                    st.error(err)
+                elif rdf is not None and not rdf.empty:
+                    added, aerr = append_posts(rdf, dedup=True)
+                    if aerr:
+                        st.error(aerr)
+                    else:
+                        st.success(f"Added {added} new posts. Stored at: {get_db_path()}")
+                else:
+                    st.warning("No new posts fetched.")
 
     with st.expander("Dataset preview", expanded=True):
         st.dataframe(df.head(30), use_container_width=True)
@@ -393,7 +508,10 @@ def main():
     c3.metric("Unique hashtags", f"{len(set([h for hs in df['hashtags'] for h in hs])):,}")
     c4.metric("Avg sentiment (compound)", f"{df['compound'].mean():.3f}")
 
-    tab_overview, tab_trends, tab_sentiment, tab_topics = st.tabs(["Overview", "Trends", "Sentiment", "Topics (LDA)"])
+    tab_overview, tab_trends, tab_sentiment, tab_topics, tab_realtime, tab_timebased, tab_platform = st.tabs([
+        "Overview", "Trends", "Sentiment", "Topics (LDA)",
+        "Real-Time Insights", "Time-Based Trends", "Platform Comparison",
+    ])
 
     with tab_overview:
         st.subheader("Overall sentiment")
@@ -516,6 +634,94 @@ def main():
             st.pyplot(plot_pie_sentiment(tcounts, f"Sentiment for: {pick}"), clear_figure=True)
             with st.expander("View posts in this topic"):
                 st.dataframe(tsub[["text", "sentiment", "compound"]].head(300), use_container_width=True)
+
+    # Real-Time Insights
+    with tab_realtime:
+        st.subheader("Live post counter")
+        st.metric("Total posts", f"{len(df):,}")
+        st.subheader("Latest trending topics")
+        if kw_df.empty:
+            st.info("Not enough data to show trends.")
+        else:
+            st.dataframe(kw_df.head(10), use_container_width=True)
+        st.subheader("Platform distribution")
+        if "platform" in df.columns:
+            platform_counts = df["platform"].value_counts()
+            fig, ax = plt.subplots(figsize=(6, 3))
+            ax.bar(platform_counts.index.astype(str), platform_counts.values, color="#4e79a7")
+            ax.set_title("Posts per platform")
+            ax.set_xlabel("Platform")
+            ax.set_ylabel("Count")
+            fig.tight_layout()
+            st.pyplot(fig, clear_figure=True)
+        else:
+            st.info("Platform column not available for this dataset.")
+
+    # Time-Based Trends
+    with tab_timebased:
+        if "timestamp" in df.columns and _HAS_ADAPTERS:
+            try:
+                posts_per, kw_per, peak = compute_trends_over_time(
+                    df, text_col="text", ts_col="timestamp", interval=time_interval, top_k=5
+                )
+                if not posts_per.empty:
+                    st.subheader("Trends over time")
+                    fig, ax = plt.subplots(figsize=(10, 4))
+                    ax.plot(posts_per["interval"].astype(str), posts_per["count"], marker="o", markersize=4)
+                    ax.set_title(f"Posts per {time_interval}")
+                    ax.set_xlabel("Time interval")
+                    ax.set_ylabel("Post count")
+                    plt.xticks(rotation=45, ha="right")
+                    fig.tight_layout()
+                    st.pyplot(fig, clear_figure=True)
+                    st.subheader("Peak activity")
+                    st.info(f"Peak interval: {peak}" if peak else "No peak detected.")
+                    rate = trend_growth_rate(posts_per)
+                    if rate is not None:
+                        st.caption(f"Trend growth rate: {rate:.2%}")
+                else:
+                    st.warning("Could not compute time-based trends. Timestamps may be unparseable.")
+            except Exception as e:
+                st.warning(f"Time analysis error: {e}. Check timestamp format.")
+        else:
+            st.info("Timestamp column needed for time-based trends. Use collected data or CSV with created_at/timestamp.")
+
+    # Platform Comparison
+    with tab_platform:
+        if "platform" in df.columns and len(df["platform"].unique()) > 1:
+            st.subheader("Trends by platform")
+            for plat in df["platform"].unique():
+                sub = df[df["platform"] == plat]
+                st.caption(f"**{plat}** — {len(sub):,} posts")
+                if len(sub) > 0:
+                    _, sub_tokens = preprocess_texts(sub["text"].tolist())
+                    sub_kw = compute_keyword_frequency(sub_tokens, min(5, top_n))
+                    if not sub_kw.empty:
+                        st.dataframe(sub_kw, use_container_width=True, height=120)
+            st.subheader("Sentiment by platform")
+            if "sentiment" in df.columns:
+                pivot = df.groupby("platform")["sentiment"].value_counts(normalize=True).unstack(fill_value=0)
+                fig, ax = plt.subplots(figsize=(8, 4))
+                pivot.plot(kind="bar", ax=ax, color={"Positive": "#59a14f", "Neutral": "#bab0ac", "Negative": "#e15759"})
+                ax.set_title("Sentiment share by platform")
+                ax.set_xlabel("Platform")
+                ax.legend(title="Sentiment")
+                plt.xticks(rotation=45, ha="right")
+                fig.tight_layout()
+                st.pyplot(fig, clear_figure=True)
+        else:
+            st.info("Need multiple platforms for comparison. Use collected data or merge CSVs from different sources.")
+
+    # Footer
+    st.markdown(
+        """
+        <style>
+        .app-footer { position: fixed; left: 0.75rem; bottom: 0.5rem; font-size: 0.8rem; color: #6b7280; z-index: 9999; }
+        </style>
+        <div class="app-footer">Crafted with ❤️ by jaswanth nanneboyina</div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 if __name__ == "__main__":
