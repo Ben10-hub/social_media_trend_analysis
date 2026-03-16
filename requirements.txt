@@ -9,3 +9,5 @@ wordcloud
 python-dotenv
 praw
 tweepy
+requests
+feedparser

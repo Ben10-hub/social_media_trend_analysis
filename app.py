@@ -2,10 +2,12 @@ import io
 import os
 import re
 import string
+import time
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 
-# Ensure Matplotlib uses a writable config/cache directory in restricted environments.
+
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 os.environ.setdefault("MPLCONFIGDIR", os.path.join(_PROJECT_DIR, ".mplconfig"))
 os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
@@ -19,7 +21,7 @@ from gensim.models.ldamodel import LdaModel
 from sklearn.feature_extraction.text import TfidfVectorizer
 from wordcloud import WordCloud
 
-# Optional: adapters and data store for multi-platform / real-time features
+
 try:
     from adapters.csv_adapter import load_csv_unified
     from adapters.reddit_adapter import fetch_reddit_posts
@@ -29,6 +31,141 @@ try:
     _HAS_ADAPTERS = True
 except ImportError:
     _HAS_ADAPTERS = False
+
+try:
+    import requests
+    _HAS_REQUESTS = True
+except ImportError:
+    _HAS_REQUESTS = False
+
+try:
+    import feedparser
+    _HAS_FEEDPARSER = True
+except ImportError:
+    _HAS_FEEDPARSER = False
+
+
+def quick_reddit_scrape(subreddit: str = "technology", limit: int = 25):
+    """
+    Scrape Reddit /r/{subreddit}/new via JSON (no API key).
+    Returns (DataFrame with platform|text|timestamp, None) on success,
+    (None, error_message) on failure.
+    """
+    if not _HAS_REQUESTS:
+        return None, "requests library not installed"
+    subreddit = (subreddit or "technology").strip().lower() or "technology"
+    try:
+        # Cache-bust so we don't get the same cached response every time
+        url = f"https://www.reddit.com/r/{subreddit}/new.json?limit={limit}&t={int(time.time())}"
+        resp = requests.get(url, headers={"User-Agent": "trend-analysis-app/1.0"}, timeout=15)
+        if resp.status_code == 404:
+            return (
+                None,
+                f"Subreddit r/{subreddit} not found or not accessible (404). Try another, e.g. technology, Python, programming.",
+            )
+        resp.raise_for_status()
+        data = resp.json()
+        children = data.get("data", {}).get("children", [])
+        rows = []
+        for child in children:
+            d = child.get("data", {})
+            title = (d.get("title") or "")
+            selftext = (d.get("selftext") or "")
+            text = (title + " " + selftext).strip() or title
+            created_utc = d.get("created_utc")
+            if created_utc is not None:
+                ts = datetime.fromtimestamp(int(created_utc), tz=timezone.utc).isoformat()
+            else:
+                ts = datetime.now(timezone.utc).isoformat()
+            rows.append({"platform": "reddit", "text": text, "timestamp": ts})
+        if not rows:
+            return None, "No posts returned"
+        return pd.DataFrame(rows, columns=["platform", "text", "timestamp"]), None
+    except Exception as e:
+        return None, str(e)
+
+
+def quick_x_scrape(query: str = "AI", limit: int = 30, instance_base: str = "https://nitter.net"):
+    """
+    Scrape X (Twitter) via Nitter RSS (no API key).
+    Returns (DataFrame with platform|text|timestamp, None) on success,
+    (None, error_message) on failure.
+    """
+    if not _HAS_FEEDPARSER:
+        return None, "feedparser library not installed"
+    try:
+        import urllib.parse
+
+        # Nitter search RSS — use q=... as recommended. Some instances may still
+        # restrict or rate-limit server-side requests, or return empty feeds.
+        base = (instance_base or "https://nitter.net").strip().rstrip("/")
+        base_url = base + "/search/rss?q=" + urllib.parse.quote(query)
+
+        # First attempt: direct feedparser call.
+        feed = feedparser.parse(base_url)
+
+        # If we hit a redirect/SSL/parse problem and requests is available, retry
+        # with requests (verify=False) and let feedparser only handle parsing.
+        status = getattr(feed, "status", None)
+        bozo = getattr(feed, "bozo", 0)
+        bozo_exc = getattr(feed, "bozo_exception", None)
+        ssl_hint = "CERTIFICATE_VERIFY_FAILED"
+        if _HAS_REQUESTS and (
+            (status and status in (301, 302, 307, 308))
+            or (bozo and bozo_exc and ssl_hint in str(bozo_exc))
+        ):
+            try:
+                resp = requests.get(base_url, headers={"User-Agent": "trend-analysis-app/1.0"}, timeout=15, verify=False)
+                resp.raise_for_status()
+                feed = feedparser.parse(resp.text)
+            except Exception:
+                # If the fallback transport also fails, we keep the original feed
+                # so that the diagnostic message below still has context.
+                pass
+
+        # FeedParserDict usually exposes .entries; fall back to dict-style if needed.
+        entries = getattr(feed, "entries", None)
+        if entries is None and hasattr(feed, "get"):
+            entries = feed.get("entries", [])
+        if entries is None:
+            entries = []
+
+        rows = []
+        for entry in entries[:limit]:
+            # entry is a FeedParserDict; attribute and dict access both work.
+            title = getattr(entry, "title", None)
+            if not title and isinstance(entry, dict):
+                title = entry.get("title")
+            text = (title or "").strip()
+
+            published = getattr(entry, "published", None)
+            if not published and isinstance(entry, dict):
+                published = entry.get("published")
+            if isinstance(published, str) and published.strip():
+                ts = published
+            else:
+                ts = datetime.now(timezone.utc).isoformat()
+
+            if text:
+                rows.append({"platform": "x", "text": text, "timestamp": ts})
+
+        if not rows:
+            # Surface more helpful diagnostics if available.
+            status = getattr(feed, "status", None)
+            if status and status != 200:
+                return None, f"Nitter RSS HTTP status {status}; search may be blocked, redirected, or rate-limited."
+            if getattr(feed, "bozo", 0):
+                bex = getattr(feed, "bozo_exception", None)
+                if bex:
+                    return None, f"Nitter RSS parse error: {bex}"
+            return None, (
+                "No entries in feed (query may be too restrictive or the Nitter instance returned an empty feed). "
+                f"Try a different instance URL (current: {base})."
+            )
+
+        return pd.DataFrame(rows, columns=["platform", "text", "timestamp"]), None
+    except Exception as e:
+        return None, str(e)
 
 
 def safe_word_tokenize(text: str) -> list[str]:
@@ -353,10 +490,43 @@ def main():
 
         data_source = st.radio(
             "Data source",
-            ["Sample", "Upload CSV", "Load from collected", "Fetch Reddit", "Fetch Twitter"],
+            [
+                "Sample",
+                "Upload CSV",
+                "Load from collected",
+                "Fetch Reddit",
+                "Fetch Twitter",
+                "Quick Reddit (No API)",
+                "Quick X (No API)",
+            ],
             index=0,
         )
-        uploaded = st.file_uploader("Upload CSV", type=["csv"]) if data_source == "Upload CSV" else None
+        uploaded_files = (
+            st.file_uploader("Upload CSV(s)", type=["csv"], accept_multiple_files=True)
+            if data_source == "Upload CSV"
+            else None
+        )
+        quick_reddit_sub = "technology"
+        quick_reddit_limit = 25
+        quick_x_query = "AI"
+        quick_x_limit = 30
+        if data_source == "Quick Reddit (No API)":
+            quick_reddit_sub = st.text_input(
+                "Subreddit",
+                value="technology",
+                key="quick_reddit_sub",
+                help="e.g. technology, Python, programming. Some subreddits (e.g. r/ai) may return 404.",
+            )
+            quick_reddit_limit = int(st.number_input("Posts to fetch", min_value=5, max_value=100, value=25, key="quick_reddit_lim"))
+        if data_source == "Quick X (No API)":
+            quick_x_query = st.text_input("Search query", value="AI", key="quick_x_query")
+            quick_x_limit = int(st.number_input("Posts to fetch", min_value=5, max_value=50, value=30, key="quick_x_lim"))
+            quick_x_instance = st.text_input(
+                "Nitter instance URL",
+                value="https://nitter.net",
+                key="quick_x_instance",
+                help="If this instance returns empty/blocked feeds, try another public Nitter instance URL.",
+            )
 
     st.title("Hybrid Social Media Trend & Sentiment Analysis")
     st.caption("Trends (hashtags/keywords/TF‑IDF/LDA) + Sentiment (VADER) + Real-time & time-based analytics.")
@@ -377,22 +547,81 @@ def main():
         except Exception as e:
             err_msg = str(e)
     elif data_source == "Upload CSV":
-        if uploaded is not None:
+        if uploaded_files is not None and len(uploaded_files) > 0:
             try:
-                if _HAS_ADAPTERS:
-                    df = load_csv_unified(file_bytes=uploaded.getvalue(), platform_default="csv")
-                else:
-                    df = load_csv(uploaded.getvalue())
-                    df["platform"] = "csv"
-                    df["timestamp"] = pd.Timestamp.utcnow().isoformat()
-                    text_col = infer_text_column([c for c in df.columns if df[c].dtype == "object"] or list(df.columns))
-                    if text_col:
-                        df["text"] = df[text_col].astype(str)
+                list_of_dfs = []
+                single_file = len(uploaded_files) == 1
+                for f in uploaded_files:
+                    fname = (getattr(f, "name", None) or "csv").replace(".csv", "").strip() or "csv"
+                    platform_default = "csv" if single_file else fname
+                    if _HAS_ADAPTERS:
+                        one_df = load_csv_unified(file_bytes=f.getvalue(), platform_default=platform_default)
+                    else:
+                        one_df = load_csv(f.getvalue())
+                        one_df["platform"] = platform_default
+                        if "timestamp" not in one_df.columns:
+                            one_df["timestamp"] = pd.Timestamp.utcnow().isoformat()
+                        else:
+                            one_df["timestamp"] = one_df["timestamp"].astype(str)
+                        text_col = infer_text_column([c for c in one_df.columns if one_df[c].dtype == "object"] or list(one_df.columns))
+                        if text_col:
+                            one_df["text"] = one_df[text_col].astype(str)
+                        else:
+                            one_df["text"] = one_df.iloc[:, 0].astype(str) if len(one_df.columns) > 0 else ""
+                        one_df = one_df[["platform", "text", "timestamp"]].copy()
+                    list_of_dfs.append(one_df)
+                df = pd.concat(list_of_dfs, ignore_index=True)
             except Exception as e:
                 err_msg = str(e)
         else:
-            st.info("Upload a CSV file.")
+            st.info("Upload at least one CSV file.")
             st.stop()
+    elif data_source == "Quick Reddit (No API)":
+        with st.spinner("Quick scraping Reddit..."):
+            df, err = quick_reddit_scrape(subreddit=quick_reddit_sub, limit=quick_reddit_limit)
+        if err or df is None or df.empty:
+            st.warning(f"Quick Reddit scrape failed: {err or 'No data'}. Using sample dataset.")
+            try:
+                sample_path = Path(__file__).resolve().parent / "data" / "sample_social_posts.csv"
+                if _HAS_ADAPTERS:
+                    df = load_csv_unified(file_path=str(sample_path), platform_default="sample")
+                else:
+                    df = pd.read_csv(sample_path)
+                    df["platform"] = "sample"
+                    df["timestamp"] = df["created_at"].astype(str) if "created_at" in df.columns else pd.Timestamp.utcnow().isoformat()
+                    df["text"] = df["text"].astype(str)
+            except Exception as e:
+                err_msg = str(e)
+    elif data_source == "Quick X (No API)":
+        if not _HAS_FEEDPARSER:
+            st.warning("feedparser not installed. Using sample dataset.")
+            try:
+                sample_path = Path(__file__).resolve().parent / "data" / "sample_social_posts.csv"
+                if _HAS_ADAPTERS:
+                    df = load_csv_unified(file_path=str(sample_path), platform_default="sample")
+                else:
+                    df = pd.read_csv(sample_path)
+                    df["platform"] = "sample"
+                    df["timestamp"] = df["created_at"].astype(str) if "created_at" in df.columns else pd.Timestamp.utcnow().isoformat()
+                    df["text"] = df["text"].astype(str)
+            except Exception as e:
+                err_msg = str(e)
+        else:
+            with st.spinner("Quick scraping X (Nitter RSS)..."):
+                df, err = quick_x_scrape(query=quick_x_query, limit=quick_x_limit, instance_base=quick_x_instance)
+            if err or df is None or df.empty:
+                st.warning(f"Quick X scrape failed: {err or 'No data'}. Using sample dataset.")
+                try:
+                    sample_path = Path(__file__).resolve().parent / "data" / "sample_social_posts.csv"
+                    if _HAS_ADAPTERS:
+                        df = load_csv_unified(file_path=str(sample_path), platform_default="sample")
+                    else:
+                        df = pd.read_csv(sample_path)
+                        df["platform"] = "sample"
+                        df["timestamp"] = df["created_at"].astype(str) if "created_at" in df.columns else pd.Timestamp.utcnow().isoformat()
+                        df["text"] = df["text"].astype(str)
+                except Exception as e:
+                    err_msg = str(e)
     elif data_source == "Load from collected":
         if _HAS_ADAPTERS:
             try:
@@ -487,6 +716,10 @@ def main():
     with st.expander("Dataset preview", expanded=True):
         st.dataframe(df.head(30), use_container_width=True)
         st.caption(f"Rows: {len(df):,} | Columns: {len(df.columns)}")
+        if data_source == "Quick Reddit (No API)":
+            st.caption("Reddit ‘new’ feed shows the latest posts; list changes only when new posts are added. Change **Subreddit** in the sidebar for different content.")
+        elif data_source == "Quick X (No API)":
+            st.caption("X results depend on the search query. Change **Search query** in the sidebar for different content.")
 
     raw_texts = df["text"].tolist()
     cleaned_texts, tokens_list = preprocess_texts(raw_texts)

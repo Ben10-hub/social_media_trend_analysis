@@ -88,3 +88,17 @@ Upload CSV with at least:
 Optional for time-based / platform features:
 - `timestamp` or `created_at`
 - `platform` or `source`
+
+**Algorithms used**
+
+- **Text processing**: tokenization, cleaning, stopword removal, and lemmatization (implemented in `safe_word_tokenize`, `basic_clean`, and `tokenize_lemmatize`) — see [app.py](app.py).
+- **Keyword & hashtag frequency**: counting with Python `Counter` and `most_common` (used in `compute_keyword_frequency`, `compute_hashtag_frequency`) — see [app.py](app.py) and per-interval counts in [time_analysis.py](time_analysis.py).
+- **TF‑IDF ranking**: `TfidfVectorizer` to score and rank terms (`compute_tfidf_top_terms`) — see [app.py](app.py).
+- **Topic modeling (LDA)**: Gensim dictionary/corpus pipeline and `LdaModel` (`compute_lda_topics`) — see [app.py](app.py).
+- **Sentiment analysis**: VADER rule-based sentiment scoring (`vader_sentiment`) — see [app.py](app.py).
+- **Time-series trend analysis**: timestamp parsing, hourly/minute bucketing, posts-per-interval aggregation, peak detection, and simple growth-rate (`compute_trends_over_time`, `trend_growth_rate`) — see [time_analysis.py](time_analysis.py).
+- **Storage & deduplication**: SQLite with UNIQUE(platform, text) and `INSERT OR IGNORE` to avoid duplicates (`append_posts`, `load_all_posts`) — see [data_store.py](data_store.py).
+- **CSV adapter heuristics**: inference of text/timestamp/platform columns and normalization (`load_csv_unified`, `infer_column`) — see [adapters/csv_adapter.py](adapters/csv_adapter.py).
+- **API ingestion patterns**: batched loops and rate-aware fetching for Reddit/Twitter adapters (`fetch_reddit_posts`, `fetch_twitter_posts`) — see [adapters/reddit_adapter.py](adapters/reddit_adapter.py) and [adapters/twitter_adapter.py](adapters/twitter_adapter.py).
+
+If you want, I can expand each bullet with example inputs/outputs or add a dedicated `ALGORITHMS.md` file.
