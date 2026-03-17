@@ -54,6 +54,7 @@ def fetch_reddit_posts(
 
     texts = []
     timestamps = []
+    locations = []
     try:
         for sub in subreddits[:5]:  # cap at 5 subreddits
             try:
@@ -61,6 +62,27 @@ def fetch_reddit_posts(
                 for post in subreddit.new(limit=min(limit_per_sub, 100)):
                     texts.append(post.selftext or post.title or "")
                     timestamps.append(post.created_utc)
+                    # Location is optional; use best-effort hints:
+                    # - author flair text (often contains region/country)
+                    # - subreddit name as a proxy location
+                    loc = None
+                    try:
+                        flair = getattr(post, "author_flair_text", None)
+                        if flair:
+                            s = str(flair).strip()
+                            if s and s.lower() not in {"none", "n/a", "na"}:
+                                loc = s
+                    except Exception:
+                        loc = None
+                    if not loc:
+                        try:
+                            sr = getattr(post, "subreddit", None)
+                            sname = getattr(sr, "display_name", None) if sr is not None else None
+                            if sname:
+                                loc = str(sname).strip() or None
+                        except Exception:
+                            loc = None
+                    locations.append(loc)
             except Exception as e:
                 continue  # skip failed subreddit
     except Exception as e:
@@ -76,4 +98,9 @@ def fetch_reddit_posts(
         for t in timestamps
     ]
     df = to_unified_df("reddit", texts, ts_str)
+    try:
+        if len(locations) == len(df):
+            df["location"] = locations
+    except Exception:
+        pass
     return df, None

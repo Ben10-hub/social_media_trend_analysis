@@ -33,6 +33,18 @@ except ImportError:
     _HAS_ADAPTERS = False
 
 try:
+    from alert_engine import detect_keyword_spikes
+    _HAS_ALERTS = True
+except Exception:
+    _HAS_ALERTS = False
+
+try:
+    from summarizer import generate_discussion_snapshot
+    _HAS_SUMMARY = True
+except Exception:
+    _HAS_SUMMARY = False
+
+try:
     import requests
     _HAS_REQUESTS = True
 except ImportError:
@@ -488,6 +500,13 @@ def main():
         lda_passes = st.slider("LDA passes", min_value=5, max_value=30, value=10, step=1)
         time_interval = st.selectbox("Time grouping", options=["hour", "minute"], index=0)
 
+        st.divider()
+        enable_spike_alerts = st.toggle("Enable Spike Alerts (on/off)", value=True)
+        spike_multiplier = st.slider("Spike threshold multiplier", min_value=1.5, max_value=5.0, value=2.0, step=0.1)
+
+        st.divider()
+        summarize_mode = st.selectbox("Summarize based on", ["All Data", "Last 1 Hour", "Last 3 Hours"], index=0)
+
         data_source = st.radio(
             "Data source",
             [
@@ -694,6 +713,27 @@ def main():
     if "timestamp" not in df.columns:
         df["timestamp"] = pd.Timestamp.utcnow().isoformat()
 
+    # 🔔 Keyword Spike Alerts (above all tabs)
+    if enable_spike_alerts and _HAS_ALERTS:
+        st.subheader("🔔 Keyword Spike Alerts")
+        try:
+            spikes = detect_keyword_spikes(df, window=5, spike_multiplier=float(spike_multiplier))
+        except Exception:
+            spikes = []
+        if spikes:
+            # Show a compact warning list (most recent/highest ratios first as returned).
+            lines = []
+            for s in spikes[:5]:
+                try:
+                    kw = s.get("keyword")
+                    ratio = float(s.get("spike_ratio", 0.0))
+                    lines.append(f"⚠️ '{str(kw).upper()}' spiked {ratio:.1f}x above average in the last hour")
+                except Exception:
+                    continue
+            st.warning("\n".join(lines) if lines else "⚠️ Keyword spikes detected.")
+        else:
+            st.success("✅ No unusual keyword spikes detected.")
+
     # Real-time collection controls (sidebar)
     if _HAS_ADAPTERS:
         with st.sidebar:
@@ -741,9 +781,11 @@ def main():
     c3.metric("Unique hashtags", f"{len(set([h for hs in df['hashtags'] for h in hs])):,}")
     c4.metric("Avg sentiment (compound)", f"{df['compound'].mean():.3f}")
 
-    tab_overview, tab_trends, tab_sentiment, tab_topics, tab_realtime, tab_timebased, tab_platform = st.tabs([
+    tab_overview, tab_trends, tab_sentiment, tab_topics, tab_realtime, tab_timebased, tab_platform, tab_geo, tab_discuss = st.tabs([
         "Overview", "Trends", "Sentiment", "Topics (LDA)",
         "Real-Time Insights", "Time-Based Trends", "Platform Comparison",
+        "Geographic Insights",
+        "💬 What's Being Discussed",
     ])
 
     with tab_overview:
@@ -944,6 +986,159 @@ def main():
                 st.pyplot(fig, clear_figure=True)
         else:
             st.info("Need multiple platforms for comparison. Use collected data or merge CSVs from different sources.")
+
+    # Geographic Insights
+    with tab_geo:
+        st.subheader("Geographic Insights")
+        try:
+            if "location" not in df.columns:
+                st.info(
+                    "No location data found. Location is extracted from Twitter user profiles \n"
+                    "or CSV location columns."
+                )
+            else:
+                loc = df["location"].astype(str)
+                loc = loc.replace({"nan": "", "None": ""}).map(lambda x: x.strip())
+                loc = loc[loc.str.len() > 0]
+                if loc.empty:
+                    st.info(
+                        "No location data found. Location is extracted from Twitter user profiles \n"
+                        "or CSV location columns."
+                    )
+                else:
+                    try:
+                        import pycountry
+                        import plotly.express as px
+                    except Exception as e:
+                        st.warning(f"Plotly/PyCountry not available: {e}. Install dependencies to enable this tab.")
+                        st.stop()
+
+                    aliases = {
+                        "usa": "United States",
+                        "u.s.a": "United States",
+                        "us": "United States",
+                        "u.s.": "United States",
+                        "uk": "United Kingdom",
+                        "u.k.": "United Kingdom",
+                        "uae": "United Arab Emirates",
+                    }
+
+                    def map_to_country_name(s: str) -> str | None:
+                        try:
+                            raw = (s or "").strip()
+                            if not raw:
+                                return None
+                            # pick the most "country-like" chunk
+                            chunk = raw.split("|")[0].strip()
+                            chunk = chunk.split("-")[-1].strip()
+                            if "," in chunk:
+                                chunk = chunk.split(",")[-1].strip()
+                            key = chunk.lower().strip(".")
+                            if key in aliases:
+                                return aliases[key]
+                            try:
+                                c = pycountry.countries.lookup(chunk)
+                                return c.name
+                            except Exception:
+                                pass
+                            try:
+                                c = pycountry.countries.search_fuzzy(chunk)[0]
+                                return c.name
+                            except Exception:
+                                return None
+                        except Exception:
+                            return None
+
+                    mapped = loc.map(map_to_country_name).dropna()
+                    mapped = mapped[mapped.astype(str).str.len() > 0]
+                    if mapped.empty:
+                        st.info(
+                            "No location data found. Location is extracted from Twitter user profiles \n"
+                            "or CSV location columns."
+                        )
+                    else:
+                        country_counts = mapped.value_counts().rename_axis("country").reset_index(name="count")
+                        fig = px.choropleth(
+                            country_counts,
+                            locations="country",
+                            locationmode="country names",
+                            color="count",
+                            color_continuous_scale="Viridis",
+                            title="Post/Trend origins by country (inferred)",
+                        )
+                        fig.update_layout(margin=dict(l=0, r=0, t=40, b=0))
+                        st.plotly_chart(fig, use_container_width=True)
+
+                        top10 = country_counts.head(10)
+                        bar = px.bar(top10.iloc[::-1], x="count", y="country", orientation="h", title="Top 10 countries")
+                        bar.update_layout(margin=dict(l=0, r=0, t=40, b=0))
+                        st.plotly_chart(bar, use_container_width=True)
+        except Exception:
+            st.info(
+                "No location data found. Location is extracted from Twitter user profiles \n"
+                "or CSV location columns."
+            )
+
+    # What's Being Discussed (Summarization)
+    with tab_discuss:
+        st.subheader("What's Being Discussed Now")
+        try:
+            if df is None or df.empty or "text" not in df.columns:
+                st.info("Not enough data to generate a summary. Load more posts.")
+            else:
+                dsum = df.copy()
+                timeframe_label = "All time"
+                if summarize_mode != "All Data" and "timestamp" in dsum.columns:
+                    try:
+                        dsum["_dt"] = pd.to_datetime(dsum["timestamp"], errors="coerce")
+                        now = pd.Timestamp.utcnow()
+                        if summarize_mode == "Last 1 Hour":
+                            cutoff = now - pd.Timedelta(hours=1)
+                            timeframe_label = "Last 1 hour"
+                        else:
+                            cutoff = now - pd.Timedelta(hours=3)
+                            timeframe_label = "Last 3 hours"
+                        dsum = dsum.dropna(subset=["_dt"])
+                        dsum = dsum[dsum["_dt"] >= cutoff]
+                    except Exception:
+                        dsum = df.copy()
+                        timeframe_label = "All time"
+
+                if len(dsum) < 5:
+                    st.info("Not enough data to generate a summary. Load more posts.")
+                else:
+                    if st.button("🔄 Refresh Summary"):
+                        st.rerun()
+
+                    if not _HAS_SUMMARY:
+                        st.warning("Summary unavailable. Please check your data.")
+                    else:
+                        try:
+                            snap = generate_discussion_snapshot(dsum)
+                            snap["timeframe"] = timeframe_label
+                            c1, c2, c3 = st.columns(3)
+                            c1.metric("Posts summarized", str(snap.get("total_posts", len(dsum))))
+                            c2.metric("Timeframe", str(snap.get("timeframe", timeframe_label)))
+                            mix = snap.get("sentiment_mix", {}) or {}
+                            c3.metric(
+                                "Sentiment mix",
+                                f"+{mix.get('positive', 0)}% / ={mix.get('neutral', 0)}% / -{mix.get('negative', 0)}%",
+                            )
+
+                            themes = snap.get("themes", []) or []
+                            if themes:
+                                st.caption("Themes")
+                                st.write(", ".join([str(t) for t in themes[:10]]))
+
+                            summary_text = (snap.get("summary") or "").strip()
+                            if summary_text:
+                                st.markdown(summary_text)
+                            else:
+                                st.warning("Summary unavailable. Please check your data.")
+                        except Exception:
+                            st.warning("Summary unavailable. Please check your data.")
+        except Exception:
+            st.warning("Summary unavailable. Please check your data.")
 
     # Footer
     st.markdown(

@@ -11,3 +11,6 @@ praw
 tweepy
 requests
 feedparser
+plotly
+pycountry
+sumy
