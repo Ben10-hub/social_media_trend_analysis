@@ -67,14 +67,33 @@ def quick_reddit_scrape(subreddit: str = "technology", limit: int = 25):
         return None, "requests library not installed"
     subreddit = (subreddit or "technology").strip().lower() or "technology"
     try:
-        # Cache-bust so we don't get the same cached response every time
+        ua = "Mozilla/5.0 (compatible; trend-analysis-app/1.0; +https://streamlit.io)"
+
+        # Prefer RSS (often less restricted than JSON).
+        if _HAS_FEEDPARSER:
+            try:
+                rss_url = f"https://www.reddit.com/r/{subreddit}/new/.rss?limit={limit}&t={int(time.time())}"
+                feed = feedparser.parse(rss_url)
+                entries = getattr(feed, "entries", None) or []
+                rows = []
+                for e in entries[:limit]:
+                    title = (getattr(e, "title", None) or "").strip()
+                    summary = (getattr(e, "summary", None) or "").strip()
+                    text = (title + " " + summary).strip() or title
+                    published = getattr(e, "published", None) or getattr(e, "updated", None)
+                    ts = published.strip() if isinstance(published, str) and published.strip() else datetime.now(timezone.utc).isoformat()
+                    if text:
+                        rows.append({"platform": "reddit", "text": text, "timestamp": ts})
+                if rows:
+                    return pd.DataFrame(rows, columns=["platform", "text", "timestamp"]), None
+            except Exception:
+                pass
+
+        # Fallback to JSON (may 403 depending on Reddit restrictions).
         url = f"https://www.reddit.com/r/{subreddit}/new.json?limit={limit}&t={int(time.time())}"
-        resp = requests.get(url, headers={"User-Agent": "trend-analysis-app/1.0"}, timeout=15)
+        resp = requests.get(url, headers={"User-Agent": ua}, timeout=15)
         if resp.status_code == 404:
-            return (
-                None,
-                f"Subreddit r/{subreddit} not found or not accessible (404). Try another, e.g. technology, Python, programming.",
-            )
+            return None, f"Subreddit r/{subreddit} not found or not accessible (404). Try another, e.g. technology, Python, programming."
         resp.raise_for_status()
         data = resp.json()
         children = data.get("data", {}).get("children", [])
