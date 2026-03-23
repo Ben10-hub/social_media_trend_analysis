@@ -1,103 +1,277 @@
-# Real-Time Trending Topics Analyzer - Enhanced Version
+# 🚀 Advanced Features Documentation
 
-## 🎯 Project Overview
-This project identifies real-time trending topics from multiple social media platforms, providing comprehensive sentiment analysis, geographic insights, and advanced search capabilities.
+## Overview
 
-## 🆕 New Features Added
+This enhanced social media analytics platform includes cutting-edge features for comprehensive trend analysis, real-time monitoring, and interactive data exploration.
 
-### 1. **YouTube Scraping** 📺
-- **Quick YouTube (No API)**: Search YouTube videos by keywords using RSS feeds
-- **Fetch YouTube (API)**: Get trending videos by region using Google YouTube API v3
-- Located in: [adapters/youtube_adapter.py](adapters/youtube_adapter.py)
+## 🎯 Core Features
 
-**Usage:**
+### 1. **Trend Velocity Analysis** 📈
+**Location**: `app.py` - Time Trends tab
+
+**What it does**:
+- Calculates true growth rates of keyword usage over time
+- Shows which topics are rising vs. falling in popularity
+- Provides early detection of emerging trends
+
+**Technical details**:
+- Pivots keyword counts to wide format (time × keywords)
+- Applies rolling mean smoothing (window=3)
+- Computes velocity as first derivative (diff)
+- Normalizes by max absolute value for comparability
+- Displays top 3-5 keywords only for clarity
+
+**Usage**:
 ```python
-from adapters.youtube_adapter import quick_youtube_scrape, fetch_youtube_trending
+# Automatically computed in Time Trends tab
+# Shows normalized velocity chart with clean x-axis
+```
 
-# Without API key
-df, err = quick_youtube_scrape(query="trending technology", limit=30)
+### 2. **Interactive Activity Insights** ⏰
+**Location**: `app.py` - Time Trends tab
 
-# With YouTube API key
+**What it does**:
+- Analyzes posting patterns by hour of day
+- Interactive topic selector with top keywords
+- Dual visualization modes: Bar Chart and Heatmap
+- Peak activity detection with metrics cards
+
+**Features**:
+- **Topic Selector**: Dropdown with most frequent keywords
+- **View Toggle**: Switch between bar chart and daily heatmap
+- **Insight Cards**: Peak hour, total posts, average per hour
+- **Smart Filtering**: Regex-based keyword matching
+- **Plotly Integration**: Hover tooltips and interactive elements
+
+**Usage**:
+```python
+# In Time Trends tab → Activity Insights expander
+# Select topic → Choose view mode → See hourly patterns
+```
+
+### 3. **Live Mode Auto-Refresh** 🔄
+**Location**: `app.py` - Sidebar controls
+
+**What it does**:
+- Automatically refreshes dashboard at configurable intervals
+- Re-fetches data from selected source without manual clicks
+- Maintains current query parameters and settings
+
+**Technical implementation**:
+- Session state tracking to prevent infinite loops
+- Configurable refresh interval (10-120 seconds)
+- Safe data reloading with fallback handling
+- Status indicator showing current mode and last update
+
+**Usage**:
+```python
+# Sidebar: Enable "Live Mode" checkbox
+# Set refresh interval slider (10-120s)
+# Status shows at top: "🟢 Live Mode Active"
+```
+
+### 4. **Enhanced Data Adapters** 🔌
+
+#### YouTube Adapter (`adapters/youtube_adapter.py`)
+```python
+# Quick scraping (no API)
+df, err = quick_youtube_scrape(query="trending", limit=30)
+
+# API integration (with YOUTUBE_API_KEY)
 df, err = fetch_youtube_trending(max_results=50, region_code="US")
 ```
 
-### 2. **Instagram Scraping** 📸
-- **Quick Instagram (No API)**: Search Instagram posts by hashtags
-- **Fetch Instagram (API)**: Get trending content using Meta Graph API
-- Located in: [adapters/instagram_adapter.py](adapters/instagram_adapter.py)
-
-**Usage:**
+#### Instagram Adapter (`adapters/instagram_adapter.py`)
 ```python
-from adapters.instagram_adapter import quick_instagram_scrape, fetch_instagram_trending
-
-# Without API key (hashtag search)
+# Quick scraping (no API)
 df, err = quick_instagram_scrape(hashtag="trending", limit=30)
 
-# With Instagram API token
+# API integration (with INSTAGRAM_ACCESS_TOKEN)
 df, err = fetch_instagram_trending(max_results=50)
 ```
 
-### 3. **Global Trending Topics** 🌍
-- Collect trending posts from **all platforms simultaneously** (Reddit, Twitter, YouTube, Instagram)
-- Automatic platform detection and topic extraction
-- Real-time global trending summary
-- Located in: [global_trends.py](global_trends.py)
+### 5. **Advanced Boolean Search** 🔍
+**Location**: `subquery_search.py`
 
-**Features:**
-- Multi-platform trend aggregation
-- Top keywords extraction per platform
-- Time-range aware trending
-- Error handling with graceful fallbacks
+**Syntax**:
+- `term1 term2` - Both terms required (AND)
+- `-term3` - Exclude term (NOT)
+- `|term4` - Optional term (OR, boosts relevance)
 
-**Usage:**
+**Examples**:
 ```python
-from global_trends import collect_global_trending, get_trending_summary
+# Search for AI content excluding hype
+query = "AI -hype"
+
+# Find trending content, boost if viral
+query = "trending |viral |popular"
+
+# Advanced topics only
+query = "machine learning -basics"
+```
+
+### 6. **Multi-Platform Trend Aggregation** 🌍
+**Location**: `global_trends.py`
+
+**Capabilities**:
+- Simultaneous collection from all platforms
+- Cross-platform keyword analysis
+- Time-aware trending detection
+- Platform-specific insights
+
+**Usage**:
+```python
+from global_trends import collect_global_trending
 
 # Collect from all platforms
-combined_df, info = collect_global_trending(
+df, info = collect_global_trending(
     include_reddit=True,
     include_twitter=True,
     include_youtube=True,
     include_instagram=True,
     posts_per_source=50
 )
-
-# Get trending summary
-summary = get_trending_summary(combined_df)
-print(f"Global keywords: {summary['top_keywords']}")
-print(f"Platforms: {summary['platforms']}")
 ```
 
-### 4. **Advanced Subquery Search** 🔍
-- Complex boolean search with multiple operators
-- Platform-based filtering
-- Date range filtering
-- Faceted search results
-- Located in: [subquery_search.py](subquery_search.py)
+### 7. **AI-Powered Discussion Summary** 🤖
+**Location**: `summarizer.py`
 
-**Search Syntax:**
-- `term1 term2` - Both terms required
-- `-term3` - Exclude this term
-- `|term4` - Optional term (boosts relevance)
+**Features**:
+- Automated theme extraction
+- Sentiment distribution analysis
+- Discussion snapshot generation
+- Topic clustering and summarization
 
-**Examples:**
-- `AI -hype` - Posts about AI but not hype
-- `trending |viral |popular` - Trending with optional viral/popular keywords
-- `machine learning -basics` - Advanced ML topics
+### 8. **Robust Time Analysis** 📊
+**Location**: `time_analysis.py`
 
-**Usage:**
+**Capabilities**:
+- Flexible timestamp parsing
+- Multiple time grouping options (hour/minute)
+- Peak activity detection
+- Trend growth rate calculation
+- Keyword frequency over time
+
+## 🎨 Visualization Features
+
+### Interactive Charts
+- **Plotly Integration**: Hover tooltips, zoom, pan
+- **Peak Highlighting**: Visual emphasis on peak values
+- **Responsive Design**: Adapts to different screen sizes
+- **Export Options**: Built-in chart export capabilities
+
+### Dashboard Layout
+- **Tabbed Interface**: Organized analysis sections
+- **Expandable Sections**: Detailed views on demand
+- **Metric Cards**: Key insights at a glance
+- **Status Indicators**: Real-time feedback
+
+## 🔧 Technical Architecture
+
+### Data Pipeline
+1. **Source Selection** → Data fetching/adapters
+2. **Preprocessing** → Text cleaning, tokenization
+3. **Analysis** → Sentiment, topics, trends
+4. **Visualization** → Interactive charts and metrics
+
+### Error Handling
+- **Graceful Degradation**: Fallback to sample data
+- **API Resilience**: Retry logic and timeout handling
+- **Data Validation**: Schema checking and type conversion
+- **User Feedback**: Clear error messages and warnings
+
+### Performance Optimizations
+- **Caching**: Streamlit cache for expensive operations
+- **Lazy Loading**: On-demand feature activation
+- **Memory Management**: Efficient data structures
+- **Async Operations**: Non-blocking data fetching
+
+## 🚀 Advanced Usage Patterns
+
+### Real-Time Monitoring
 ```python
-from subquery_search import SubquerySearch
+# Enable Live Mode for continuous monitoring
+# Set refresh interval based on use case
+# Monitor trend velocity for early signals
+```
 
-search = SubquerySearch(df)
+### Comparative Analysis
+```python
+# Use VADER vs TextBlob comparison
+# Compare activity patterns across topics
+# Analyze cross-platform sentiment differences
+```
 
-# Simple search
-results = search.search(query="AI -hype", platform_filter="reddit")
+### Custom Data Integration
+```python
+# Upload CSV with custom schema
+# Automatic column detection
+# Unified processing pipeline
+```
 
-# Advanced analysis with stats
-analysis = search.search_and_analyze(
-    query="trending technology",
-    top_keywords=15,
+## 📈 Analytics Capabilities
+
+### Sentiment Analysis
+- **VADER**: Rule-based, fast, social media optimized
+- **TextBlob**: ML-based, more nuanced but slower
+- **Comparison Mode**: Side-by-side analysis
+- **Distribution Charts**: Visual sentiment breakdown
+
+### Topic Modeling
+- **LDA**: Latent Dirichlet Allocation
+- **Coherence Scoring**: Topic quality metrics
+- **Interactive Exploration**: Topic-by-topic analysis
+- **Sentiment per Topic**: Combined analysis
+
+### Trend Detection
+- **Keyword Frequency**: Raw counts and rankings
+- **TF-IDF**: Term importance scoring
+- **Velocity Analysis**: Growth rate tracking
+- **Temporal Patterns**: Time-based insights
+
+## 🔐 Security & Privacy
+
+### API Key Management
+- **Environment Variables**: Secure credential storage
+- **Optional Dependencies**: Graceful degradation without APIs
+- **Rate Limiting**: Built-in delays and quotas
+- **Error Masking**: No sensitive data in error messages
+
+### Data Handling
+- **No Data Persistence**: Unless explicitly collected
+- **Local Processing**: All analysis happens client-side
+- **Export Controls**: User-controlled data export
+- **Privacy Compliance**: No tracking or data sharing
+
+## 🎯 Use Cases
+
+### Social Media Monitoring
+- Brand sentiment tracking
+- Crisis detection and response
+- Influencer analysis
+- Campaign performance monitoring
+
+### Market Research
+- Consumer trend identification
+- Competitive analysis
+- Product feedback analysis
+- Industry sentiment tracking
+
+### Academic Research
+- Social discourse analysis
+- Temporal trend studies
+- Cross-platform comparison
+- Sentiment pattern research
+
+### Content Strategy
+- Topic performance analysis
+- Optimal posting time identification
+- Content theme optimization
+- Audience engagement insights
+
+---
+
+*This documentation reflects the enhanced feature set as of March 2026. Features are continuously evolving with user feedback and technological advancements.*
     platform_filter=None
 )
 

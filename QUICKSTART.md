@@ -1,103 +1,233 @@
-# 🚀 Quick Start Guide (Updated)
+# 🚀 Quick Start Guide - Enhanced Dashboard
 
-## What's New (March 2026 refactor)
-- Sidebar data sources now:
-  - `Sample`
-  - `Upload CSV`
-  - `Quick Reddit`
-  - `Quick X`
-  - `Quick YouTube`
-  - `Quick Instagram`
-  - `Hacker News`
-  - `News RSS`
-  - `Load from collected`
-- Removed API options that used to require custom keys for the main flow.
-- Added consolidated tabs:
-  - `📊 Overview`
-  - `📈 Trends`
-  - `🧠 Topics (LDA)`
-  - `⏱ Time Trends`
-  - `🌍 Geographic`
-  - `🔍 Search`
-- New advanced insights:
-  - Trend Velocity chart
-  - Topic coherence (c_v)
-  - VADER vs TextBlob comparison panel
-  - AI summary built into Trends tab
+## Welcome to the Advanced Social Media Analytics Platform!
 
-## Quick start
+This guide will get you up and running with the latest features including **Trend Velocity**, **Activity Insights**, and **Live Mode**.
+
+## ⚡ Quick Setup (3 minutes)
+
 ```bash
+# 1. Clone and navigate
+git clone https://github.com/Ben10-hub/social_media_trend_analysis.git
+cd social_media_trend_analysis
+
+# 2. Setup environment
 python -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+
+# 3. Install dependencies
 pip install -r requirements.txt
+
+# 4. Launch app
 streamlit run app.py
 ```
 
-## Recommended package for hot reload
+## 🎯 First Steps
+
+### 1. Choose Your Data Source
+The sidebar offers multiple options:
+- **Sample**: Test with built-in dataset (recommended for first run)
+- **Quick Reddit/X/YouTube/Instagram**: No-API scraping
+- **Hacker News**: Tech stories from HN
+- **News RSS**: Tech news from major sources
+- **Upload CSV**: Import your own data
+
+### 2. Explore the Dashboard
+Six main tabs provide comprehensive analysis:
+
+#### 📊 Overview Tab
+- **Dataset metrics**: Post count, platform distribution
+- **Sentiment analysis**: VADER sentiment with pie charts
+- **Word clouds**: Visual keyword representation
+- **Trend sentiment**: Sentiment over time
+
+#### 📈 Trends Tab
+- **Top keywords**: Most frequent terms
+- **Hashtags**: Popular hashtag analysis
+- **TF-IDF**: Important term scoring
+- **Trend Velocity**: Growth rate visualization ⭐ **NEW**
+- **AI Summary**: Automated discussion themes ⭐ **NEW**
+
+#### 🧠 Topics Tab
+- **LDA Topics**: Topic modeling with coherence scores
+- **Topic visualization**: Interactive topic exploration
+- **Sentiment per topic**: Combined analysis
+
+#### ⏱️ Time Trends Tab
+- **Post volume**: Activity over time
+- **Activity Insights**: Hourly patterns with bar/heatmap ⭐ **NEW**
+- **Peak detection**: When discussions are most active
+
+#### 🌍 Geographic Tab
+- **World map**: Location-based visualization
+- **Country rankings**: Top posting countries
+- **Location insights**: Geographic trends
+
+#### 🔍 Search Tab
+- **Boolean queries**: Advanced search syntax
+- **Platform filtering**: Search specific sources
+- **Result analysis**: Detailed search results
+
+## 🆕 New Features to Try
+
+### 1. **Trend Velocity Analysis** 📈
+**Location**: Trends tab → Trend Velocity expander
+
+**What to do**:
+1. Load time-series data (Sample or collected data works)
+2. Go to Trends tab
+3. Expand "Trend Velocity" section
+4. See smoothed growth rates for top keywords
+5. Note the clean visualization showing rising/falling trends
+
+### 2. **Activity Insights** ⏰
+**Location**: Time Trends tab → Activity Insights expander
+
+**What to do**:
+1. Load data with timestamps
+2. Go to Time Trends tab
+3. Expand "Activity Insights"
+4. Select a keyword from the dropdown
+5. Toggle between Bar Chart and Heatmap views
+6. Check the insight cards for peak activity metrics
+
+### 3. **Live Mode** 🔄
+**Location**: Sidebar → Real-time collection section
+
+**What to do**:
+1. Select a data source (e.g., Quick Reddit)
+2. In sidebar, check "Enable Live Mode"
+3. Adjust refresh interval (10-120 seconds)
+4. Notice the status indicator at top changes to "Live Mode Active"
+5. Watch data auto-refresh and update automatically
+
+## 🎨 Advanced Usage Examples
+
+### Real-Time Monitoring Setup
 ```bash
-pip install watchdog
+# 1. Select Quick Reddit source
+# 2. Enable Live Mode with 30s refresh
+# 3. Monitor Trend Velocity for emerging topics
+# 4. Use Activity Insights to find optimal posting times
 ```
 
-## Quick path
-1. Start app and pick a source
-2. Confirm loaded dataframe
-3. Explore tabs:
-   - Overview: metrics, sentiment, wordcloud, trend sentiment
-   - Trends: top keywords/hashtags/TF-IDF + velocity + AI summary
-   - Topics: LDA + coherence + topic sentiment
-   - Time Trends: post volume and growth
-   - Geographic: map + top country chart
-   - Search: boolean query analyzer
-
-## Notes
-- textblob required for model comparison: `pip install textblob`
-- feedparser required for Quick X / RSS (already in requirements)
-- no API keys needed for Hacker News / News RSS
-
-### 3️⃣ Advanced Search with Boolean Operators
-New tab: **🔍 Subquery Search**
-
-**Syntax examples:**
-```
-AI -hype              → Find AI posts but exclude hype
-trending |viral       → Trending posts, boost if viral
-technology -basics    → Advanced tech topics only
+### Comparative Analysis
+```bash
+# 1. Load data from different sources
+# 2. Compare sentiment distributions
+# 3. Analyze topic coherence across platforms
+# 4. Use geographic insights for location-based trends
 ```
 
-### 4️⃣ Geographic Insights Enhanced
-New tab: **Geographic Insights** (improved!)
+### Custom Data Analysis
+```bash
+# 1. Upload CSV with text and timestamp columns
+# 2. Run preprocessing and analysis
+# 3. Explore all tabs for comprehensive insights
+# 4. Export results for further analysis
+```
 
-**What's new:**
-- See world map of where posts originate
-- See top countries posting about your topic
-- Automatic country detection
+## 🔧 Configuration Options
 
-**To see it:**
-1. Load sample data with location: Use built-in sample
-2. Or upload CSV with "location" column
+### Sidebar Controls
+- **Number of trends**: Adjust analysis depth (5-50)
+- **LDA topics**: Topic modeling complexity (2-12)
+- **LDA passes**: Model training iterations (5-30)
+- **Time grouping**: Hour or minute resolution
+
+### Data Source Settings
+- **Quick Reddit**: Subreddit selection + post limit
+- **Quick X**: Search query + Nitter instance
+- **Quick YouTube**: Search terms + video limit
+- **Quick Instagram**: Hashtag + post limit
+
+## 🆘 Troubleshooting
+
+### Common Issues & Solutions
+
+**App won't start**:
+- Check Python version (3.8+ recommended)
+- Ensure all dependencies installed: `pip install -r requirements.txt`
+- Try running in clean virtual environment
+
+**No data loading**:
+- Start with "Sample" data source for testing
+- Check internet connection for scraping sources
+- Verify CSV format for uploads
+
+**Charts not displaying**:
+- Ensure matplotlib backend is configured
+- Check for missing optional dependencies
+- Try refreshing the page
+
+**Live Mode not working**:
+- Check browser console for errors
+- Ensure stable internet connection
+- Try shorter refresh intervals
+
+**API errors**:
+- Most features work without API keys
+- Check `.env` file format for optional APIs
+- Fall back to "Quick" (no-API) versions
+
+### Performance Tips
+- Use smaller datasets for faster analysis
+- Disable Live Mode when not needed
+- Close unused browser tabs
+- Use sample data for feature testing
+
+## 📚 Learning Resources
+
+### Feature Documentation
+- **[Features Guide](FEATURES.md)**: Detailed feature explanations
+- **[README](README.md)**: Project overview and setup
+- **[Startup Guide](STARTUP.md)**: Configuration and deployment
+
+### API Setup (Optional)
+- **Reddit**: Create app at reddit.com/prefs/apps
+- **YouTube**: Google Cloud Console API key
+- **Instagram**: Meta Graph API token
+- **X/Twitter**: Twitter Developer Portal
+
+## 🎯 Next Steps
+
+### Beginner Path
+1. ✅ Complete basic setup
+2. ✅ Explore all tabs with sample data
+3. ✅ Try different data sources
+4. 🔄 Enable Live Mode for real-time monitoring
+
+### Advanced Path
+1. ✅ Setup API credentials for enhanced features
+2. ✅ Upload custom datasets
+3. ✅ Use boolean search for complex queries
+4. 🔄 Integrate with `collect_real_time.py` for continuous data
+
+### Development Path
+1. ✅ Review source code structure
+2. ✅ Understand adapter pattern
+3. ✅ Modify existing features
+4. 🔄 Add new data sources or analysis methods
+
+## 💡 Pro Tips
+
+- **Start small**: Use sample data to learn features
+- **Live Mode**: Great for monitoring, but can be resource-intensive
+- **Boolean search**: Powerful for filtering specific content
+- **Trend Velocity**: Best with time-series data from multiple sources
+- **Activity Insights**: Most useful for understanding audience behavior
+
+## 🆘 Getting Help
+
+- **Documentation**: Check FEATURES.md for detailed explanations
+- **GitHub Issues**: Report bugs or request features
+- **Community**: Join discussions for tips and tricks
 
 ---
 
-## 📍 Step-by-Step Usage
+**Happy analyzing! 🎉**
 
-### Try YouTube Scraping
-1. Open `app.py` in Streamlit
-2. In sidebar → Select "Quick YouTube (No API)"
-3. Change query to any topic (e.g., "AI trends", "gaming")
-4. Adjust "Videos to fetch" (5-50)
-5. Click "Run" → See YouTube trending data analyzed
-
-### Try Global Trending
-1. In sidebar → Select "Global Trending"
-2. Wait for data collection from all 4 platforms
-3. See sidebar notification: "✅ Collected X posts from Y platforms"
-4. Analyze combined data across all tabs
-
-### Try Subquery Search
-1. Go to **🔍 Subquery Search** tab
-2. Type search: `machine learning -basics`
-3. Optionally filter by platform (Reddit, Twitter, etc.)
-4. See results with:
+*Last updated: March 2026*
    - Platform breakdown chart
    - Sentiment analysis
    - Top keywords found
