@@ -108,4 +108,4 @@ Optional for time-based / platform features:
 - **CSV adapter heuristics**: inference of text/timestamp/platform columns and normalization (`load_csv_unified`, `infer_column`) — see [adapters/csv_adapter.py](adapters/csv_adapter.py).
 - **API ingestion patterns**: batched loops and rate-aware fetching for Reddit/Twitter adapters (`fetch_reddit_posts`, `fetch_twitter_posts`) — see [adapters/reddit_adapter.py](adapters/reddit_adapter.py) and [adapters/twitter_adapter.py](adapters/twitter_adapter.py).
 
-If you want, I can expand each bullet with example inputs/outputs or add a dedicated `ALGORITHMS.md` file.
+
