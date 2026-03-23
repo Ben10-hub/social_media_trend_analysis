@@ -25,6 +25,23 @@ def _is_long_enough(text: str, min_words: int = 5) -> bool:
     return len(_WORD_RE.findall(text)) >= min_words
 
 
+def _truncate(text: str, max_chars: int = 220) -> str:
+    """
+    Soft-limit very long posts so the summary stays compact.
+    """
+    if not isinstance(text, str):
+        text = str(text)
+    text = text.strip()
+    if len(text) <= max_chars:
+        return text
+    cut = text[: max_chars - 3].rstrip()
+    # avoid cutting in the middle of a word if possible
+    last_space = cut.rfind(" ")
+    if last_space > max_chars * 0.6:
+        cut = cut[:last_space]
+    return cut + "..."
+
+
 def get_top_sentences(df: pd.DataFrame, top_n: int = 10):
     """
     Pick top-N representative posts using TF-IDF scoring.
@@ -63,7 +80,7 @@ def get_top_sentences(df: pd.DataFrame, top_n: int = 10):
         return []
 
 
-def extractive_summary(df: pd.DataFrame, num_sentences: int = 5) -> str:
+def extractive_summary(df: pd.DataFrame, num_sentences: int = 20) -> str:
     """
     Extractive summary using Sumy LSA. Returns bullet-style string.
 
@@ -91,7 +108,7 @@ def extractive_summary(df: pd.DataFrame, num_sentences: int = 5) -> str:
             for s in sents:
                 line = _normalize_space(str(s))
                 if _is_long_enough(line, 5):
-                    bullets.append(line)
+                    bullets.append(_truncate(line))
             if bullets:
                 return "\n".join([f"- {b}" for b in bullets[:num_sentences]])
         except Exception:
@@ -99,10 +116,10 @@ def extractive_summary(df: pd.DataFrame, num_sentences: int = 5) -> str:
             pass
 
         top = get_top_sentences(df, top_n=max(1, int(num_sentences)))
-        return "\n".join([f"- {t}" for t in top[:num_sentences]]) if top else ""
+        return "\n".join([f"- {_truncate(t)}" for t in top[:num_sentences]]) if top else ""
     except Exception:
         top = get_top_sentences(df, top_n=max(1, int(num_sentences)))
-        return "\n".join([f"- {t}" for t in top[:num_sentences]]) if top else ""
+        return "\n".join([f"- {_truncate(t)}" for t in top[:num_sentences]]) if top else ""
 
 
 def get_discussion_themes(df: pd.DataFrame, top_n: int = 5):
@@ -113,8 +130,10 @@ def get_discussion_themes(df: pd.DataFrame, top_n: int = 5):
     if df is None or df.empty or "text" not in df.columns:
         return []
     try:
+        # Prefer cleaned tokens if available to avoid noisy words.
+        source = df["clean_text"] if "clean_text" in df.columns else df["text"]
         c = Counter()
-        for t in df["text"].astype(str).tolist():
+        for t in source.astype(str).tolist():
             toks = [w.lower() for w in _WORD_RE.findall(t)]
             c.update(toks)
         # Filter extremely common/low-signal tokens (small hardcoded list).
@@ -139,6 +158,23 @@ def get_discussion_themes(df: pd.DataFrame, top_n: int = 5):
             "just",
             "about",
             "what",
+            "will",
+            "can",
+            "has",
+            "have",
+            "people",
+            "one",
+            "like",
+            "time",
+            "today",
+            "now",
+            "new",
+            "get",
+            "got",
+            "make",
+            "made",
+            "also",
+            "really",
         }
         items = [(w, n) for (w, n) in c.most_common(max(50, top_n * 10)) if w not in stop]
         return items[:top_n]
@@ -177,13 +213,41 @@ def generate_discussion_snapshot(df: pd.DataFrame):
     themes_pairs = get_discussion_themes(df, top_n=5)
     themes = [w.upper() if len(w) <= 4 else w.title() for (w, _) in themes_pairs]
 
-    bullets = extractive_summary(df, num_sentences=5)
+    # Aim for a compact set of representative bullets.
+    bullets = extractive_summary(df, num_sentences=8)
+    # Build a short, human-readable snapshot paragraph.
     try:
+        lines: list[str] = []
         if themes:
             theme_part = ", ".join(themes[:5])
-            para = f"People are mainly discussing {theme_part}. Key points:\n{bullets}" if bullets else f"People are mainly discussing {theme_part}."
-        else:
-            para = f"Key points from current posts:\n{bullets}" if bullets else ""
+            lines.append(f"People are mainly talking about {theme_part}.")
+
+        # Add sentiment interpretation if available.
+        try:
+            pos = mix.get("positive", 0)
+            neu = mix.get("neutral", 0)
+            neg = mix.get("negative", 0)
+            if pos or neu or neg:
+                dominant = max(("positive", pos), ("neutral", neu), ("negative", neg), key=lambda x: x[1])[0]
+                if dominant == "positive":
+                    trend = "overall tone is mostly positive"
+                elif dominant == "negative":
+                    trend = "overall tone is mostly negative"
+                else:
+                    trend = "overall tone is fairly mixed and neutral"
+                lines.append(f"Out of {total_posts} posts, the {trend} "
+                             f"({pos}% positive, {neu}% neutral, {neg}% negative).")
+        except Exception:
+            pass
+
+        # Optionally append a few short example bullets.
+        if bullets:
+            lines.append("Some representative opinions:")
+            # Keep only first few bullets to avoid overwhelming text.
+            for b in bullets.splitlines()[:6]:
+                lines.append(b)
+
+        para = "\n".join(lines).strip()
     except Exception:
         para = bullets or ""
 

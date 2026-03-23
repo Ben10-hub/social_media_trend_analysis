@@ -1,0 +1,35 @@
+id,created_at,text,location,platform
+1,2026-02-01,"So excited about new AI tools in education! #AI #EdTech","San Francisco, USA",twitter
+2,2026-02-01,"Fuel prices are insane again... this is getting ridiculous. #FuelPrices","London, UK",twitter
+3,2026-02-01,"What a cricket match! That final over was unbelievable. #Cricket #MatchDay","Mumbai, India",twitter
+4,2026-02-02,"AI jobs look promising, but the interview process is brutal. #AIJobs #Careers","New York, USA",reddit
+5,2026-02-02,"I love the new features in the latest phone update. Great work!","Toronto, Canada",twitter
+6,2026-02-02,"Can't believe petrol went up overnight. Worst news. #FuelPrices","Sydney, Australia",reddit
+7,2026-02-03,"That wicket was pure magic. Proud of the team! #Cricket","Delhi, India",twitter
+8,2026-02-03,"Remote work is the best thing that happened to my productivity. #WorkFromHome","Berlin, Germany",reddit
+9,2026-02-03,"This movie was boring and way too long.","Tokyo, Japan",twitter
+10,2026-02-03,"The latest smartphone trends are fascinating. 5G is everywhere now.","Singapore, Singapore",twitter
+11,2026-02-04,"Cryptocurrency is finally getting mainstream adoption! #Crypto #Bitcoin","Los Angeles, USA",reddit
+12,2026-02-04,"Climate change awareness is spreading globally. Time for action. #Climate","Melbourne, Australia",twitter
+13,2026-02-04,"Machine learning breakthroughs happening every week. #MachineLearning #AI","Amsterdam, Netherlands",reddit
+14,2026-02-04,"Gaming communities are more diverse than ever before. Love it! #Gaming","Paris, France",twitter
+15,2026-02-05,"Hyped about the next tech conference! #TechConference #Innovation","Seattle, USA",twitter
+16,2026-02-05,"Social media trends come and go so fast. Hard to keep up. #SocialMedia","Bangkok, Thailand",reddit
+17,2026-02-05,"Sustainable fashion is the future we need. #Sustainability #Fashion","Copenhagen, Denmark",twitter
+18,2026-02-05,"The metaverse potential is still underrated. #Metaverse #VirtualWorlds","Seoul, South Korea",reddit
+19,2026-02-06,"Fintech disruption is real. Traditional banking has competition now. #Fintech","Dubai, UAE",twitter
+20,2026-02-06,"Podcast culture has changed how we consume content. #Podcasts #Audio","Porto, Portugal",reddit
+21,2026-02-06,"Quantum computing milestones reached this year. Amazing progress! #QuantumComputing","Vancouver, Canada",twitter
+22,2026-02-06,"E-commerce continues to boom despite economic uncertainty. #Ecommerce","Milan, Italy",reddit
+23,2026-02-07,"Cybersecurity threats increasing rapidly. Everyone needs to be vigilant. #Cybersecurity","Stockholm, Sweden",twitter
+24,2026-02-07,"Remote first culture is here to stay. Traditional offices are becoming obsolete. #RemoteWork","Dublin, Ireland",reddit
+25,2026-02-07,"Blockchain technology applications expanding beyond crypto. #Blockchain #Web3","Hong Kong, China",twitter
+26,2026-02-07,"Mental health awareness in tech industry finally gaining traction. #MentalHealth","Wellington, New Zealand",reddit
+27,2026-02-08,"Autonomous vehicles getting closer to reality every day. #SelfDrivingCars","Munich, Germany",twitter
+28,2026-02-08,"Open source community pushing software innovation forward. #OpenSource","São Paulo, Brazil",reddit
+29,2026-02-08,"Space exploration making headlines. Commercial space travel is coming! #Space","Moscow, Russia",twitter
+30,2026-02-08,"Biotechnology innovations saving lives worldwide. #Biotech #Science","Zurich, Switzerland",reddit
+31,2026-02-09,"IoT devices becoming smarter and more interconnected. #IoT #SmartHomes","Bangkok, Thailand",twitter
+32,2026-02-09,"API economy is transforming business model innovation. #APIsEconomy","Mexico City, Mexico",reddit
+33,2026-02-09,"Green energy adoption accelerating globally. Solar and wind everywhere! #GreenEnergy","Cairo, Egypt",twitter
+34,2026-02-09,"Edge computing solving latency problems for real-time applications. #EdgeComputing","Jakarta, Indonesia",reddit

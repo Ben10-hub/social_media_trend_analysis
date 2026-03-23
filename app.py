@@ -26,17 +26,14 @@ try:
     from adapters.csv_adapter import load_csv_unified
     from adapters.reddit_adapter import fetch_reddit_posts
     from adapters.twitter_adapter import fetch_twitter_posts
+    from adapters.youtube_adapter import fetch_youtube_trending, quick_youtube_scrape
+    from adapters.instagram_adapter import fetch_instagram_trending, quick_instagram_scrape
     from data_store import append_posts, get_db_path, load_all_posts
     from time_analysis import compute_trends_over_time, trend_growth_rate
+    from subquery_search import SubquerySearch
     _HAS_ADAPTERS = True
 except ImportError:
     _HAS_ADAPTERS = False
-
-try:
-    from alert_engine import detect_keyword_spikes
-    _HAS_ALERTS = True
-except Exception:
-    _HAS_ALERTS = False
 
 try:
     from summarizer import generate_discussion_snapshot
@@ -464,22 +461,6 @@ def make_wordcloud(tokens_list: list[list[str]]):
     return fig
 
 
-def apply_theme(dark: bool):
-    if not dark:
-        return
-    st.markdown(
-        """
-        <style>
-        .stApp { background: #0b1220; color: #e5e7eb; }
-        h1, h2, h3, h4 { color: #e5e7eb; }
-        section[data-testid="stSidebar"] { background: #0f172a; }
-        div[data-testid="stMetricValue"] { color: #e5e7eb; }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 def infer_text_column(columns: list[str]) -> str | None:
     if not columns:
         return None
@@ -508,11 +489,16 @@ def infer_text_column(columns: list[str]) -> str | None:
 def main():
     st.set_page_config(page_title="Trend & Sentiment Analyzer", layout="wide")
 
+    if "live_mode" not in st.session_state:
+        st.session_state["live_mode"] = False
+    if "refresh_interval" not in st.session_state:
+        st.session_state["refresh_interval"] = 30
+    if "last_live_refresh" not in st.session_state:
+        st.session_state["last_live_refresh"] = 0.0
+
     with st.sidebar:
         st.title("Controls")
         st.caption("Choose data source or upload a CSV with a text column.")
-        dark_mode = st.toggle("Dark mode", value=False)
-        apply_theme(dark_mode)
 
         top_n = st.slider("Number of trends", min_value=5, max_value=50, value=15, step=1)
         lda_topics_n = st.slider("LDA topics", min_value=2, max_value=12, value=5, step=1)
@@ -520,22 +506,19 @@ def main():
         time_interval = st.selectbox("Time grouping", options=["hour", "minute"], index=0)
 
         st.divider()
-        enable_spike_alerts = st.toggle("Enable Spike Alerts (on/off)", value=True)
-        spike_multiplier = st.slider("Spike threshold multiplier", min_value=1.5, max_value=5.0, value=2.0, step=0.1)
-
-        st.divider()
-        summarize_mode = st.selectbox("Summarize based on", ["All Data", "Last 1 Hour", "Last 3 Hours"], index=0)
 
         data_source = st.radio(
             "Data source",
             [
                 "Sample",
                 "Upload CSV",
+                "Quick Reddit",
+                "Quick X",
+                "Quick YouTube",
+                "Quick Instagram",
+                "Hacker News",
+                "News RSS",
                 "Load from collected",
-                "Fetch Reddit",
-                "Fetch Twitter",
-                "Quick Reddit (No API)",
-                "Quick X (No API)",
             ],
             index=0,
         )
@@ -548,7 +531,12 @@ def main():
         quick_reddit_limit = 25
         quick_x_query = "AI"
         quick_x_limit = 30
-        if data_source == "Quick Reddit (No API)":
+        quick_youtube_query = "trending"
+        quick_youtube_limit = 30
+        quick_instagram_hashtag = "trending"
+        quick_instagram_limit = 30
+        
+        if data_source == "Quick Reddit":
             quick_reddit_sub = st.text_input(
                 "Subreddit",
                 value="technology",
@@ -556,18 +544,44 @@ def main():
                 help="e.g. technology, Python, programming. Some subreddits (e.g. r/ai) may return 404.",
             )
             quick_reddit_limit = int(st.number_input("Posts to fetch", min_value=5, max_value=100, value=25, key="quick_reddit_lim"))
-        if data_source == "Quick X (No API)":
+        if data_source == "Quick X":
             quick_x_query = st.text_input("Search query", value="AI", key="quick_x_query")
-            quick_x_limit = int(st.number_input("Posts to fetch", min_value=5, max_value=50, value=30, key="quick_x_lim"))
+            quick_x_limit = int(st.number_input("Posts to fetch", min_value=5, max_value=100, value=30, key="quick_x_lim"))
             quick_x_instance = st.text_input(
                 "Nitter instance URL",
                 value="https://nitter.net",
                 key="quick_x_instance",
                 help="If this instance returns empty/blocked feeds, try another public Nitter instance URL.",
             )
+        if data_source == "Quick YouTube":
+            quick_youtube_query = st.text_input("Search query", value="trending", key="quick_youtube_query")
+            quick_youtube_limit = int(st.number_input("Videos to fetch", min_value=5, max_value=100, value=30, key="quick_youtube_lim"))
+        if data_source == "Quick Instagram":
+            quick_instagram_hashtag = st.text_input("Hashtag (without #)", value="trending", key="quick_instagram_hashtag")
+            quick_instagram_limit = int(st.number_input("Posts to fetch", min_value=5, max_value=100, value=30, key="quick_instagram_lim"))
 
     st.title("Hybrid Social Media Trend & Sentiment Analysis")
     st.caption("Trends (hashtags/keywords/TF‑IDF/LDA) + Sentiment (VADER) + Real-time & time-based analytics.")
+
+    # ── Live Mode Status Indicator ──────────────────────────────────────────
+    if st.session_state.get("live_mode", False):
+        st.success(f"""
+        🟢 **Live Mode Active**
+        - Refresh interval: {st.session_state.get("refresh_interval", 30)}s
+        - Last updated: {datetime.now().strftime("%H:%M:%S")}
+        """, icon="✅")
+    else:
+        st.info("⚪ **Manual Mode** — Select data source and click Collect buttons manually.", icon="ℹ️")
+
+    # ── Live Rerun Logic ───────────────────────────────────────────────────
+    if st.session_state.get("live_mode", False):
+        now = time.time()
+        last_refresh = st.session_state.get("last_live_refresh", 0.0)
+        refresh_interval = st.session_state.get("refresh_interval", 30)
+        if now - last_refresh >= refresh_interval:
+            st.session_state["last_live_refresh"] = now
+            time.sleep(0.1)
+            st.rerun()
 
     df = None
     err_msg = None
@@ -614,7 +628,7 @@ def main():
         else:
             st.info("Upload at least one CSV file.")
             st.stop()
-    elif data_source == "Quick Reddit (No API)":
+    elif data_source == "Quick Reddit":
         with st.spinner("Quick scraping Reddit..."):
             df, err = quick_reddit_scrape(subreddit=quick_reddit_sub, limit=quick_reddit_limit)
         if err or df is None or df.empty:
@@ -630,7 +644,7 @@ def main():
                     df["text"] = df["text"].astype(str)
             except Exception as e:
                 err_msg = str(e)
-    elif data_source == "Quick X (No API)":
+    elif data_source == "Quick X":
         if not _HAS_FEEDPARSER:
             st.warning("feedparser not installed. Using sample dataset.")
             try:
@@ -660,6 +674,38 @@ def main():
                         df["text"] = df["text"].astype(str)
                 except Exception as e:
                     err_msg = str(e)
+    elif data_source == "Quick YouTube":
+        with st.spinner("Quick scraping YouTube..."):
+            df, err = quick_youtube_scrape(query=quick_youtube_query, limit=quick_youtube_limit)
+        if err or df is None or df.empty:
+            st.warning(f"Quick YouTube scrape failed: {err or 'No data'}. Using sample dataset.")
+            try:
+                sample_path = Path(__file__).resolve().parent / "data" / "sample_social_posts.csv"
+                if _HAS_ADAPTERS:
+                    df = load_csv_unified(file_path=str(sample_path), platform_default="sample")
+                else:
+                    df = pd.read_csv(sample_path)
+                    df["platform"] = "sample"
+                    df["timestamp"] = df["created_at"].astype(str) if "created_at" in df.columns else pd.Timestamp.utcnow().isoformat()
+                    df["text"] = df["text"].astype(str)
+            except Exception as e:
+                err_msg = str(e)
+    elif data_source == "Quick Instagram":
+        with st.spinner("Quick scraping Instagram..."):
+            df, err = quick_instagram_scrape(hashtag=quick_instagram_hashtag, limit=quick_instagram_limit)
+        if err or df is None or df.empty:
+            st.warning(f"Quick Instagram scrape failed: {err or 'No data'}. Using sample dataset.")
+            try:
+                sample_path = Path(__file__).resolve().parent / "data" / "sample_social_posts.csv"
+                if _HAS_ADAPTERS:
+                    df = load_csv_unified(file_path=str(sample_path), platform_default="sample")
+                else:
+                    df = pd.read_csv(sample_path)
+                    df["platform"] = "sample"
+                    df["timestamp"] = df["created_at"].astype(str) if "created_at" in df.columns else pd.Timestamp.utcnow().isoformat()
+                    df["text"] = df["text"].astype(str)
+            except Exception as e:
+                err_msg = str(e)
     elif data_source == "Load from collected":
         if _HAS_ADAPTERS:
             try:
@@ -679,36 +725,96 @@ def main():
         else:
             st.warning("Collectors not available. Use sample or upload.")
             st.stop()
-    elif data_source == "Fetch Reddit":
-        if _HAS_ADAPTERS:
-            with st.spinner("Fetching from Reddit..."):
-                df, err = fetch_reddit_posts(subreddits=["python", "technology"], limit_per_sub=30)
-            if err:
-                st.warning(f"Reddit API: {err}. Using sample dataset.")
+    elif data_source == "Hacker News":
+        with st.spinner("Fetching Hacker News top stories..."):
+            try:
+                import requests
+                top_ids_resp = requests.get(
+                    "https://hacker-news.firebaseio.com/v0/topstories.json", timeout=10
+                )
+                top_ids = top_ids_resp.json()[:40]
+                rows = []
+                for item_id in top_ids:
+                    try:
+                        item = requests.get(
+                            f"https://hacker-news.firebaseio.com/v0/item/{item_id}.json",
+                            timeout=5,
+                        ).json()
+                        title = item.get("title", "")
+                        url = item.get("url", "")
+                        text = (title + " " + url).strip()
+                        ts = datetime.fromtimestamp(
+                            item.get("time", 0), tz=timezone.utc
+                        ).isoformat()
+                        if text:
+                            rows.append({"platform": "hackernews", "text": text, "timestamp": ts})
+                    except Exception:
+                        continue
+                if rows:
+                    df = pd.DataFrame(rows, columns=["platform", "text", "timestamp"])
+                else:
+                    raise ValueError("No stories returned")
+            except Exception as e:
+                st.warning(f"Hacker News fetch failed: {e}. Using sample dataset.")
                 sample_path = Path(__file__).resolve().parent / "data" / "sample_social_posts.csv"
-                df = load_csv_unified(file_path=str(sample_path), platform_default="sample")
-            elif df is None or df.empty:
-                st.warning("No Reddit posts returned. Using sample dataset.")
+                df = load_csv_unified(file_path=str(sample_path), platform_default="sample") if _HAS_ADAPTERS else pd.read_csv(sample_path)
+    elif data_source == "News RSS":
+        with st.sidebar:
+            rss_options = {
+                "TechCrunch": "https://techcrunch.com/feed/",
+                "BBC Technology": "http://feeds.bbci.co.uk/news/technology/rss.xml",
+                "The Verge": "https://www.theverge.com/rss/index.xml",
+                "Wired": "https://www.wired.com/feed/rss",
+            }
+            rss_choice = st.selectbox("RSS Feed", list(rss_options.keys()))
+        with st.spinner(f"Fetching {rss_choice} RSS..."):
+            try:
+                if not _HAS_FEEDPARSER:
+                    raise ImportError("feedparser not installed")
+                feed = feedparser.parse(rss_options[rss_choice])
+                rows = []
+                for entry in feed.entries[:50]:
+                    title = getattr(entry, "title", "") or ""
+                    summary = getattr(entry, "summary", "") or ""
+                    text = (title + " " + summary).strip()
+                    published = getattr(entry, "published", None)
+                    ts = published if isinstance(published, str) and published else datetime.now(timezone.utc).isoformat()
+                    if text:
+                        rows.append({"platform": "news_rss", "text": text, "timestamp": ts})
+                if rows:
+                    df = pd.DataFrame(rows, columns=["platform", "text", "timestamp"])
+                else:
+                    raise ValueError("No RSS entries found")
+            except Exception as e:
+                st.warning(f"RSS fetch failed: {e}. Using sample dataset.")
                 sample_path = Path(__file__).resolve().parent / "data" / "sample_social_posts.csv"
-                df = load_csv_unified(file_path=str(sample_path), platform_default="sample")
-        else:
-            st.warning("Reddit adapter not available. Use sample or upload.")
-            st.stop()
-    elif data_source == "Fetch Twitter":
-        if _HAS_ADAPTERS:
-            with st.spinner("Fetching from Twitter..."):
-                df, err = fetch_twitter_posts(query="AI OR machine learning", max_results=50)
-            if err:
-                st.warning(f"Twitter API: {err}. Using sample dataset.")
-                sample_path = Path(__file__).resolve().parent / "data" / "sample_social_posts.csv"
-                df = load_csv_unified(file_path=str(sample_path), platform_default="sample")
-            elif df is None or df.empty:
-                st.warning("No tweets returned. Using sample dataset.")
-                sample_path = Path(__file__).resolve().parent / "data" / "sample_social_posts.csv"
-                df = load_csv_unified(file_path=str(sample_path), platform_default="sample")
-        else:
-            st.warning("Twitter adapter not available. Use sample or upload.")
-            st.stop()
+                df = load_csv_unified(file_path=str(sample_path), platform_default="sample") if _HAS_ADAPTERS else pd.read_csv(sample_path)
+
+    # ── Live Mode Data Reload (auto-refresh from selected source) ─────────
+    if st.session_state.get("live_mode", False) and df is not None:
+        try:
+            if data_source == "Load from collected" and _HAS_ADAPTERS:
+                fresh_df = load_all_posts()
+                if fresh_df is not None and not fresh_df.empty and len(fresh_df) > len(df):
+                    df = fresh_df
+            elif data_source == "Quick Reddit":
+                fresh, err = quick_reddit_scrape(subreddit=quick_reddit_sub, limit=quick_reddit_limit)
+                if not err and fresh is not None and not fresh.empty and len(fresh) > len(df):
+                    df = fresh
+            elif data_source == "Quick X":
+                fresh, err = quick_x_scrape(query=quick_x_query, limit=quick_x_limit, instance_base=quick_x_instance)
+                if not err and fresh is not None and not fresh.empty and len(fresh) > len(df):
+                    df = fresh
+            elif data_source == "Quick YouTube":
+                fresh, err = quick_youtube_scrape(query=quick_youtube_query, limit=quick_youtube_limit)
+                if not err and fresh is not None and not fresh.empty and len(fresh) > len(df):
+                    df = fresh
+            elif data_source == "Quick Instagram":
+                fresh, err = quick_instagram_scrape(hashtag=quick_instagram_hashtag, limit=quick_instagram_limit)
+                if not err and fresh is not None and not fresh.empty and len(fresh) > len(df):
+                    df = fresh
+        except Exception:
+            pass
 
     if df is None:
         st.error(err_msg or "No data loaded.")
@@ -732,35 +838,14 @@ def main():
     if "timestamp" not in df.columns:
         df["timestamp"] = pd.Timestamp.utcnow().isoformat()
 
-    # 🔔 Keyword Spike Alerts (above all tabs)
-    if enable_spike_alerts and _HAS_ALERTS:
-        st.subheader("🔔 Keyword Spike Alerts")
-        try:
-            spikes = detect_keyword_spikes(df, window=5, spike_multiplier=float(spike_multiplier))
-        except Exception:
-            spikes = []
-        if spikes:
-            # Show a compact warning list (most recent/highest ratios first as returned).
-            lines = []
-            for s in spikes[:5]:
-                try:
-                    kw = s.get("keyword")
-                    ratio = float(s.get("spike_ratio", 0.0))
-                    lines.append(f"⚠️ '{str(kw).upper()}' spiked {ratio:.1f}x above average in the last hour")
-                except Exception:
-                    continue
-            st.warning("\n".join(lines) if lines else "⚠️ Keyword spikes detected.")
-        else:
-            st.success("✅ No unusual keyword spikes detected.")
-
     # Real-time collection controls (sidebar)
     if _HAS_ADAPTERS:
         with st.sidebar:
             st.divider()
             st.subheader("Real-time collection")
-            if st.button("Collect Now", help="Fetch Reddit posts and append to SQLite"):
-                with st.spinner("Fetching..."):
-                    rdf, err = fetch_reddit_posts(subreddits=["python", "technology"], limit_per_sub=25)
+            if st.button("Collect Reddit (now)", help="Fetch Reddit posts and append to SQLite"):
+                with st.spinner("Fetching Reddit..."):
+                    rdf, err = fetch_reddit_posts(subreddits=["python", "technology"], limit_per_sub=50)
                 if err:
                     st.error(err)
                 elif rdf is not None and not rdf.empty:
@@ -772,13 +857,59 @@ def main():
                 else:
                     st.warning("No new posts fetched.")
 
+            if st.button("Collect YouTube (now)", help="Fetch YouTube trending via adapter and append to SQLite"):
+                with st.spinner("Fetching YouTube..."):
+                    ydf, err = fetch_youtube_trending(max_results=50, region_code="US")
+                if err:
+                    st.error(err)
+                elif ydf is not None and not ydf.empty:
+                    added, aerr = append_posts(ydf, dedup=True)
+                    if aerr:
+                        st.error(aerr)
+                    else:
+                        st.success(f"Added {added} new posts. Stored at: {get_db_path()}")
+                else:
+                    st.warning("No new posts fetched.")
+
+            if st.button("Collect Instagram (now)", help="Fetch Instagram trending via adapter and append to SQLite"):
+                with st.spinner("Fetching Instagram..."):
+                    idf, err = fetch_instagram_trending(max_results=50)
+                if err:
+                    st.error(err)
+                elif idf is not None and not idf.empty:
+                    added, aerr = append_posts(idf, dedup=True)
+                    if aerr:
+                        st.error(aerr)
+                    else:
+                        st.success(f"Added {added} new posts. Stored at: {get_db_path()}")
+                else:
+                    st.warning("No new posts fetched.")
+
+            st.divider()
+            st.subheader("🔴 Live Mode")
+            st.session_state["live_mode"] = st.checkbox(
+                "Enable Live Mode", value=st.session_state.get("live_mode", False),
+                help="Auto-refresh and reload data from selected source every N seconds."
+            )
+            st.session_state["refresh_interval"] = st.slider(
+                "Refresh interval (seconds)",
+                min_value=10, max_value=120, value=st.session_state.get("refresh_interval", 30),
+                step=5, key="live_refresh_slider"
+            )
+            if st.session_state.get("live_mode"):
+                st.info("💡 Tip: Run `collect_real_time.py` for continuous data ingestion to SQLite.")
+
     with st.expander("Dataset preview", expanded=True):
         st.dataframe(df.head(30), use_container_width=True)
         st.caption(f"Rows: {len(df):,} | Columns: {len(df.columns)}")
-        if data_source == "Quick Reddit (No API)":
+        if data_source == "Quick Reddit":
             st.caption("Reddit ‘new’ feed shows the latest posts; list changes only when new posts are added. Change **Subreddit** in the sidebar for different content.")
-        elif data_source == "Quick X (No API)":
+        elif data_source == "Quick X":
             st.caption("X results depend on the search query. Change **Search query** in the sidebar for different content.")
+        elif data_source == "Quick YouTube":
+            st.caption("YouTube no-API scrape via RSS proxy. If results are slow, try a different query.")
+        elif data_source == "Quick Instagram":
+            st.caption("Instagram no-API scrape via RSS proxy. If results are slow, try a different hashtag.")
 
     raw_texts = df["text"].tolist()
     cleaned_texts, tokens_list = preprocess_texts(raw_texts)
@@ -794,33 +925,330 @@ def main():
 
     lda_pack = compute_lda_topics(tokens_list, num_topics=lda_topics_n, passes=lda_passes)
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Posts", f"{len(df):,}")
-    c2.metric("Unique keywords", f"{len(set([t for toks in tokens_list for t in toks])):,}")
-    c3.metric("Unique hashtags", f"{len(set([h for hs in df['hashtags'] for h in hs])):,}")
-    c4.metric("Avg sentiment (compound)", f"{df['compound'].mean():.3f}")
-
-    tab_overview, tab_trends, tab_sentiment, tab_topics, tab_realtime, tab_timebased, tab_platform, tab_geo, tab_discuss = st.tabs([
-        "Overview", "Trends", "Sentiment", "Topics (LDA)",
-        "Real-Time Insights", "Time-Based Trends", "Platform Comparison",
-        "Geographic Insights",
-        "💬 What's Being Discussed",
+    tab_overview, tab_trends, tab_topics, tab_timebased, tab_geo, tab_subquery = st.tabs([
+        "📊 Overview",
+        "📈 Trends",
+        "🧠 Topics (LDA)",
+        "⏱ Time Trends",
+        "🌍 Geographic",
+        "🔍 Search",
     ])
 
     with tab_overview:
-        st.subheader("Overall sentiment")
-        counts = df["sentiment"].value_counts()
-        fig = plot_pie_sentiment(counts, "Overall sentiment distribution")
-        st.pyplot(fig, clear_figure=True, use_container_width=False)
+        # ── Dataset statistics ──────────────────────────────────────────────
+        st.subheader("Dataset Overview")
+        vocab_size = len(set(w for toks in tokens_list for w in toks))
+        avg_len = df["text"].str.split().str.len().mean()
+        o1, o2, o3, o4 = st.columns(4)
+        o1.metric("Total Posts", f"{len(df):,}")
+        o2.metric("Vocabulary Size", f"{vocab_size:,}")
+        o3.metric("Unique Hashtags", f"{len(set(h for hs in df['hashtags'] for h in hs)):,}")
+        o4.metric("Avg Post Length", f"{avg_len:.1f} words")
 
-        st.subheader("Word cloud (frequent terms)")
+        # ── Sentiment distribution ───────────────────────────────────────────
+        st.subheader("Overall Sentiment (VADER)")
+        col_pie, col_table = st.columns([1, 1])
+        with col_pie:
+            counts = df["sentiment"].value_counts()
+            fig = plot_pie_sentiment(counts, "Sentiment distribution")
+            st.pyplot(fig, clear_figure=True)
+        with col_table:
+            st.caption("Breakdown by platform")
+            if "platform" in df.columns and df["platform"].nunique() > 1:
+                pivot = df.groupby("platform")["sentiment"].value_counts(normalize=True).unstack(fill_value=0)
+                pivot = pivot.reindex(columns=["Positive", "Neutral", "Negative"], fill_value=0)
+                pivot = pivot.applymap(lambda x: f"{x:.1%}")
+                st.dataframe(pivot, use_container_width=True)
+            else:
+                st.caption(f"Avg compound score: **{df['compound'].mean():.3f}**")
+                dist = df["sentiment"].value_counts().reset_index()
+                dist.columns = ["Sentiment", "Count"]
+                st.dataframe(dist, use_container_width=True)
+
+        # ── Model Comparison: VADER vs TextBlob ──────────────────────────────
+        with st.expander("🔬 Model Comparison: VADER vs TextBlob (Academic)"):
+            st.caption(
+                "This section justifies the choice of VADER as the primary sentiment model. "
+                "VADER is rule-based and optimised for short, informal social media text. "
+                "TextBlob is a general-purpose model that often underperforms on social media."
+            )
+            try:
+                from textblob import TextBlob
+                sample_texts = df["text"].dropna().head(200).tolist()
+                tb_labels = []
+                for t in sample_texts:
+                    pol = TextBlob(str(t)).sentiment.polarity
+                    if pol > 0.05:
+                        tb_labels.append("Positive")
+                    elif pol < -0.05:
+                        tb_labels.append("Negative")
+                    else:
+                        tb_labels.append("Neutral")
+                vader_labels = df["sentiment"].head(200).tolist()
+                agree = sum(v == t for v, t in zip(vader_labels, tb_labels))
+                agreement_pct = agree / len(sample_texts) * 100 if sample_texts else 0
+                m1, m2, m3 = st.columns(3)
+                m1.metric("VADER Positive %", f"{vader_labels.count('Positive') / len(vader_labels):.1%}")
+                m2.metric("TextBlob Positive %", f"{tb_labels.count('Positive') / len(tb_labels):.1%}")
+                m3.metric("Model Agreement", f"{agreement_pct:.1f}%")
+                comp_df = pd.DataFrame({
+                    "Model": ["VADER", "TextBlob"],
+                    "Positive": [
+                        vader_labels.count("Positive") / len(vader_labels),
+                        tb_labels.count("Positive") / len(tb_labels),
+                    ],
+                    "Neutral": [
+                        vader_labels.count("Neutral") / len(vader_labels),
+                        tb_labels.count("Neutral") / len(tb_labels),
+                    ],
+                    "Negative": [
+                        vader_labels.count("Negative") / len(vader_labels),
+                        tb_labels.count("Negative") / len(tb_labels),
+                    ],
+                })
+                fig, ax = plt.subplots(figsize=(7, 3))
+                x = np.arange(2)
+                width = 0.25
+                ax.bar(x - width, comp_df["Positive"], width, label="Positive", color="#59a14f")
+                ax.bar(x, comp_df["Neutral"], width, label="Neutral", color="#bab0ac")
+                ax.bar(x + width, comp_df["Negative"], width, label="Negative", color="#e15759")
+                ax.set_xticks(x)
+                ax.set_xticklabels(["VADER", "TextBlob"])
+                ax.set_ylabel("Share of posts")
+                ax.set_title("VADER vs TextBlob Sentiment Distribution")
+                ax.legend()
+                fig.tight_layout()
+                st.pyplot(fig, clear_figure=True)
+                st.caption("VADER is preferred for social media because it handles slang, emojis, and punctuation emphasis (e.g. 'GREAT!!!') — factors TextBlob ignores.")
+            except ImportError:
+                st.info("Install textblob (`pip install textblob`) to enable this comparison.")
+            except Exception as e:
+                st.warning(f"Comparison error: {e}")
+
+        # ── Word cloud ───────────────────────────────────────────────────────
+        st.subheader("Word Cloud (Frequent Terms)")
         wc_fig = make_wordcloud(tokens_list)
         if wc_fig is None:
             st.warning("Not enough processed text to build a word cloud.")
         else:
             st.pyplot(wc_fig, clear_figure=True, use_container_width=True)
 
+        # ── Sentiment per trend (moved from old Sentiment tab) ───────────────
+        st.subheader("Sentiment per Trend (VADER)")
+        st.caption("Select a keyword or hashtag to see how people feel about it.")
+        trend_mode = st.radio("Trend type", ["Keyword", "Hashtag", "TF‑IDF term"], horizontal=True, key="ov_trend_mode")
+        if trend_mode == "Keyword":
+            options = kw_df["keyword"].tolist() if not kw_df.empty else []
+        elif trend_mode == "Hashtag":
+            options = ht_df["hashtag"].tolist() if not ht_df.empty else []
+        else:
+            options = tfidf_df["term"].tolist() if not tfidf_df.empty else []
+        if not options:
+            st.info("No trends available to analyze.")
+        else:
+            selected = st.selectbox("Select a trend", options=options, index=0, key="ov_trend_select")
+            if trend_mode == "Hashtag":
+                mask = df["text"].str.lower().str.contains(re.escape(selected), na=False)
+            else:
+                pattern = r"\b" + re.escape(selected.lower()) + r"\b"
+                mask = df["clean_text"].str.contains(pattern, regex=True, na=False)
+            subset = df.loc[mask].copy()
+            st.caption(f"Matching posts: {len(subset):,}")
+            if subset.empty:
+                st.warning("No matching posts for this trend.")
+            else:
+                scounts = subset["sentiment"].value_counts()
+                st.pyplot(plot_pie_sentiment(scounts, f"Sentiment for: {selected}"), clear_figure=True)
+                with st.expander("View matching posts"):
+                    st.dataframe(subset[["text", "sentiment", "compound"]].head(100), use_container_width=True)
+
+        # ── Download ─────────────────────────────────────────────────────────
+        out = df[["text", "sentiment", "compound", "clean_text"]].copy()
+        st.download_button(
+            "📥 Download Sentiment Results CSV",
+            data=out.to_csv(index=False).encode("utf-8"),
+            file_name="sentiment_results.csv",
+            mime="text/csv",
+        )
+
     with tab_trends:
+        # ── Trend Velocity (growth rate of top keywords over time) ──────────
+        if "timestamp" in df.columns and _HAS_ADAPTERS:
+            with st.expander("📉 Trend Velocity — Keyword Growth Over Time"):
+                st.caption("Shows how fast each keyword is rising or falling. Useful for spotting emerging trends.")
+                try:
+                    from time_analysis import compute_trends_over_time
+                    _, kw_per, _ = compute_trends_over_time(
+                        df, text_col="text", ts_col="timestamp", interval="hour", top_k=10
+                    )
+                    if kw_per is not None and not kw_per.empty and "keyword" in kw_per.columns:
+                        wide = kw_per.pivot_table(
+                            index="interval", columns="keyword", values="count", aggfunc="sum"
+                        ).fillna(0)
+
+                        if wide.empty:
+                            st.info("Not enough keyword data for velocity chart.")
+                        else:
+                            # Select top 3-5 keywords by total frequency
+                            top_keywords = wide.sum(axis=0).sort_values(ascending=False).head(5).index.tolist()
+                            top_keywords = [k for k in top_keywords if k in wide.columns]
+                            if not top_keywords:
+                                st.info("No strong keywords found to plot velocity.")
+                            else:
+                                small = wide[top_keywords].copy()
+
+                                # smoothing with rolling mean
+                                smoothed = small.rolling(window=3, min_periods=1, center=True).mean()
+
+                                # velocity as step changes
+                                velocity = smoothed.diff().fillna(0)
+
+                                # normalize each keyword by max abs velocity (plus 1 to avoid division by zero)
+                                norm = velocity.copy()
+                                for col in norm.columns:
+                                    max_val = abs(norm[col]).max()
+                                    norm[col] = norm[col] / (max_val + 1)
+
+                                # use the timestamp index as x-axis labels
+                                x = list(norm.index.astype(str))
+
+                                fig, ax = plt.subplots(figsize=(11, 5))
+                                for kw in norm.columns:
+                                    ax.plot(x, norm[kw], linewidth=2, marker="", label=kw)
+
+                                ax.set_title("Trend Velocity (Smoothed Growth Rate)")
+                                ax.set_xlabel("Time Interval")
+                                ax.set_ylabel("Normalized Velocity")
+                                ax.legend(loc="upper left", fontsize=9, ncol=2)
+
+                                # make x-axis readable
+                                n_ticks = min(len(x), 8)
+                                if n_ticks > 1:
+                                    step = max(1, len(x) // n_ticks)
+                                    tick_locs = list(range(0, len(x), step))
+                                    ax.set_xticks([x[i] for i in tick_locs])
+                                ax.tick_params(axis="x", rotation=30, labelsize=8)
+
+                                fig.tight_layout()
+                                st.pyplot(fig, clear_figure=True)
+                    else:
+                        st.info("Not enough time-series data for velocity chart.")
+                except Exception as e:
+                    st.info(f"Velocity chart unavailable: {e}")
+
+        with st.expander("📊 Activity Insights — Post timing by hour"):
+            try:
+                from time_analysis import compute_trends_over_time
+                _, kw_per2, _ = compute_trends_over_time(
+                    df, text_col="text", ts_col="timestamp", interval="hour", top_k=30
+                )
+            except Exception as e:
+                st.warning(f"Could not compute trends: {e}")
+                kw_per2 = pd.DataFrame()
+
+            if kw_per2 is None or kw_per2.empty:
+                st.info("Not enough data for activity insights.")
+            else:
+                keyword_order = (
+                    kw_per2.groupby("keyword")["count"].sum().sort_values(ascending=False).index.tolist()
+                )
+                if not keyword_order:
+                    st.info("No keywords found for activity insights.")
+                else:
+                    topic = st.selectbox(
+                        "Topic selector",
+                        options=keyword_order[:20],
+                        index=0,
+                        help="Select keyword for per-hour activity insights.",
+                        key="activity_topic_select",
+                    )
+
+                    view_mode = st.radio(
+                        "View mode",
+                        options=["Bar Chart", "Heatmap"],
+                        index=0,
+                        horizontal=True,
+                        key="activity_view_mode",
+                    )
+
+                    text_col = "clean_text" if "clean_text" in df.columns else "text"
+                    mask = df[text_col].astype(str).str.contains(
+                        rf"\b{re.escape(topic)}\b", case=False, regex=True, na=False
+                    )
+                    topic_df = df.loc[mask].copy()
+
+                    if topic_df.empty:
+                        st.warning(f"No posts found for topic '{topic}'.")
+                    else:
+                        topic_df["_dt"] = pd.to_datetime(topic_df["timestamp"], errors="coerce")
+                        topic_df = topic_df.dropna(subset=["_dt"])
+                        if topic_df.empty:
+                            st.warning("No valid timestamps for selected topic.")
+                        else:
+                            topic_df["hour"] = topic_df["_dt"].dt.hour
+                            topic_df["day"] = topic_df["_dt"].dt.strftime("%Y-%m-%d")
+
+                            hourly = (
+                                topic_df.groupby("hour").size().reindex(range(24), fill_value=0).reset_index(name="count")
+                            )
+                            heat_table = (
+                                topic_df.groupby(["day", "hour"]).size().reset_index(name="count")
+                            )
+                            peak_hour = int(hourly.loc[hourly["count"].idxmax(), "hour"])
+                            peak_count = int(hourly["count"].max())
+                            total_posts = int(len(topic_df))
+                            avg_per_hour = float(hourly["count"].mean())
+
+                            card1, card2, card3 = st.columns(3)
+                            card1.metric("Peak hour", f"{peak_hour}:00", f"{peak_count} posts")
+                            card2.metric("Total posts", f"{total_posts}")
+                            card3.metric("Average posts/hour", f"{avg_per_hour:.2f}")
+
+                            st.markdown(
+                                f"Most discussions happen around **{peak_hour}:00** with **{peak_count}** posts in one hour."
+                            )
+
+                            try:
+                                import plotly.express as px
+
+                                hourly["hour_label"] = hourly["hour"].apply(
+                                    lambda h: f"{(h%12 or 12)} {'AM' if h<12 else 'PM'}"
+                                )
+
+                                if view_mode == "Bar Chart":
+                                    bar_fig = px.bar(
+                                        hourly,
+                                        x="hour_label",
+                                        y="count",
+                                        title=f"Hourly posts for '{topic}'",
+                                        labels={"hour_label": "Hour", "count": "Post Count"},
+                                        hover_data={"hour_label": True, "count": True},
+                                    )
+                                    bar_fig.update_traces(
+                                        marker_color=[
+                                            "crimson" if h == peak_hour else "steelblue" for h in hourly["hour"]
+                                        ]
+                                    )
+                                    bar_fig.update_layout(xaxis_tickangle=-30)
+                                    st.plotly_chart(bar_fig, use_container_width=True)
+
+                                else:
+                                    pivot = heat_table.pivot(index="day", columns="hour", values="count").fillna(0)
+                                    pivot = pivot.reindex(columns=range(24), fill_value=0)
+                                    heat_fig = px.imshow(
+                                        pivot,
+                                        labels={"x": "Hour", "y": "Day", "color": "Post Count"},
+                                        x=[f"{h}:00" for h in pivot.columns],
+                                        y=pivot.index,
+                                        aspect="auto",
+                                        color_continuous_scale="Blues",
+                                    )
+                                    heat_fig.update_layout(title=f"Daily hour heatmap for '{topic}'")
+                                    st.plotly_chart(heat_fig, use_container_width=True)
+
+                            except Exception as e:
+                                st.warning(f"Plotly not available or rendered: {e}")
+
         st.subheader("Top keywords (frequency)")
         if kw_df.empty:
             st.warning("No keywords found after preprocessing.")
@@ -844,55 +1272,38 @@ def main():
             st.pyplot(plot_bar(tfidf_show, "term", "score", "Top TF‑IDF terms"), clear_figure=True, use_container_width=True)
             st.dataframe(tfidf_show, use_container_width=True)
 
-    with tab_sentiment:
-        st.subheader("Sentiment per trend")
-        trend_mode = st.radio("Trend type", ["Keyword", "Hashtag", "TF‑IDF term"], horizontal=True)
-
-        if trend_mode == "Keyword":
-            options = kw_df["keyword"].tolist() if not kw_df.empty else []
-        elif trend_mode == "Hashtag":
-            options = ht_df["hashtag"].tolist() if not ht_df.empty else []
+        # ── What's Being Discussed (AI Summary) ──────────────────────────────
+        st.divider()
+        st.subheader("💬 What's Being Discussed")
+        st.caption("AI-generated summary of the main themes in the current dataset.")
+        if not _HAS_SUMMARY:
+            st.info("Summary module not available. Ensure summarizer.py is present.")
         else:
-            options = tfidf_df["term"].tolist() if not tfidf_df.empty else []
-
-        if not options:
-            st.info("No trends available to analyze.")
-        else:
-            selected = st.selectbox("Select a trend", options=options, index=0)
-
-            if trend_mode == "Hashtag":
-                mask = df["text"].str.lower().str.contains(re.escape(selected), na=False)
+            summarize_col1, summarize_col2 = st.columns([3, 1])
+            with summarize_col2:
+                if st.button("🔄 Generate Summary", key="trends_summary_btn"):
+                    st.session_state["run_summary"] = True
+            if st.session_state.get("run_summary"):
+                try:
+                    snap = generate_discussion_snapshot(df)
+                    themes = snap.get("themes", []) or []
+                    summary_text = (snap.get("summary") or "").strip()
+                    mix = snap.get("sentiment_mix", {}) or {}
+                    s1, s2, s3 = st.columns(3)
+                    s1.metric("Posts Analysed", str(snap.get("total_posts", len(df))))
+                    s2.metric("Top Themes", str(len(themes)))
+                    s3.metric("Sentiment Mix", f"+{mix.get('positive',0)}% ={mix.get('neutral',0)}% -{mix.get('negative',0)}%")
+                    if themes:
+                        st.write("**Themes:**", ", ".join([str(t) for t in themes[:10]]))
+                    if summary_text:
+                        st.markdown(summary_text)
+                    else:
+                        st.info("Summary unavailable — try a larger dataset.")
+                except Exception as e:
+                    st.warning(f"Summary error: {e}")
             else:
-                pattern = r"\b" + re.escape(selected.lower()) + r"\b"
-                mask = df["clean_text"].str.contains(pattern, regex=True, na=False)
+                st.info("Click 'Generate Summary' to analyse what's being discussed right now.")
 
-            subset = df.loc[mask].copy()
-            st.caption(f"Matching posts: {len(subset):,}")
-            if subset.empty:
-                st.warning("No matching posts for this trend.")
-            else:
-                scounts = subset["sentiment"].value_counts()
-                st.pyplot(plot_pie_sentiment(scounts, f"Sentiment for: {selected}"), clear_figure=True)
-
-                dist = (
-                    subset["sentiment"]
-                    .value_counts(normalize=True)
-                    .reindex(["Positive", "Neutral", "Negative"])
-                    .fillna(0.0)
-                    .rename("share")
-                    .reset_index()
-                    .rename(columns={"index": "sentiment"})
-                )
-                dist["share"] = dist["share"].map(lambda x: float(f"{x:.3f}"))
-                st.dataframe(dist, use_container_width=True)
-
-                with st.expander("View matching posts"):
-                    st.dataframe(subset[["text", "sentiment", "compound"]].head(200), use_container_width=True)
-
-        st.subheader("Download results")
-        out = df[["text", "sentiment", "compound", "clean_text"]].copy()
-        out_csv = out.to_csv(index=False).encode("utf-8")
-        st.download_button("Download sentiment results CSV", data=out_csv, file_name="sentiment_results.csv", mime="text/csv")
 
     with tab_topics:
         st.subheader("Discovered topics (LDA)")
@@ -904,6 +1315,29 @@ def main():
             lda = lda_pack["lda"]
             tdf = lda_topics_table(lda, num_words=10)
             st.dataframe(tdf, use_container_width=True)
+
+            # Coherence score — academic quality metric
+            st.subheader("Topic Coherence Score (c_v)")
+            try:
+                from gensim.models import CoherenceModel
+                with st.spinner("Computing coherence score..."):
+                    coherence_model = CoherenceModel(
+                        model=lda,
+                        texts=lda_pack["filtered_tokens"],
+                        dictionary=lda_pack["dictionary"],
+                        coherence="c_v",
+                    )
+                    c_score = coherence_model.get_coherence()
+                col_c1, col_c2 = st.columns(2)
+                col_c1.metric("Coherence (c_v)", f"{c_score:.4f}")
+                col_c2.metric("Interpretation", "Good ✅" if c_score >= 0.4 else "Moderate ⚠️" if c_score >= 0.3 else "Low ❌")
+                st.caption(
+                    "Coherence (c_v) measures how semantically similar the top words "
+                    "within each topic are. Scores > 0.4 indicate meaningful, well-separated topics. "
+                    "Use the **LDA passes** and **LDA topics** sliders in the sidebar to optimise."
+                )
+            except Exception as e:
+                st.info(f"Coherence computation unavailable: {e}")
 
             st.subheader("Topic sentiment (dominant topic per post)")
             filtered_indices = lda_pack["filtered_indices"]
@@ -929,27 +1363,6 @@ def main():
             with st.expander("View posts in this topic"):
                 st.dataframe(tsub[["text", "sentiment", "compound"]].head(300), use_container_width=True)
 
-    # Real-Time Insights
-    with tab_realtime:
-        st.subheader("Live post counter")
-        st.metric("Total posts", f"{len(df):,}")
-        st.subheader("Latest trending topics")
-        if kw_df.empty:
-            st.info("Not enough data to show trends.")
-        else:
-            st.dataframe(kw_df.head(10), use_container_width=True)
-        st.subheader("Platform distribution")
-        if "platform" in df.columns:
-            platform_counts = df["platform"].value_counts()
-            fig, ax = plt.subplots(figsize=(6, 3))
-            ax.bar(platform_counts.index.astype(str), platform_counts.values, color="#4e79a7")
-            ax.set_title("Posts per platform")
-            ax.set_xlabel("Platform")
-            ax.set_ylabel("Count")
-            fig.tight_layout()
-            st.pyplot(fig, clear_figure=True)
-        else:
-            st.info("Platform column not available for this dataset.")
 
     # Time-Based Trends
     with tab_timebased:
@@ -980,31 +1393,6 @@ def main():
         else:
             st.info("Timestamp column needed for time-based trends. Use collected data or CSV with created_at/timestamp.")
 
-    # Platform Comparison
-    with tab_platform:
-        if "platform" in df.columns and len(df["platform"].unique()) > 1:
-            st.subheader("Trends by platform")
-            for plat in df["platform"].unique():
-                sub = df[df["platform"] == plat]
-                st.caption(f"**{plat}** — {len(sub):,} posts")
-                if len(sub) > 0:
-                    _, sub_tokens = preprocess_texts(sub["text"].tolist())
-                    sub_kw = compute_keyword_frequency(sub_tokens, min(5, top_n))
-                    if not sub_kw.empty:
-                        st.dataframe(sub_kw, use_container_width=True, height=120)
-            st.subheader("Sentiment by platform")
-            if "sentiment" in df.columns:
-                pivot = df.groupby("platform")["sentiment"].value_counts(normalize=True).unstack(fill_value=0)
-                fig, ax = plt.subplots(figsize=(8, 4))
-                pivot.plot(kind="bar", ax=ax, color={"Positive": "#59a14f", "Neutral": "#bab0ac", "Negative": "#e15759"})
-                ax.set_title("Sentiment share by platform")
-                ax.set_xlabel("Platform")
-                ax.legend(title="Sentiment")
-                plt.xticks(rotation=45, ha="right")
-                fig.tight_layout()
-                st.pyplot(fig, clear_figure=True)
-        else:
-            st.info("Need multiple platforms for comparison. Use collected data or merge CSVs from different sources.")
 
     # Geographic Insights
     with tab_geo:
@@ -1098,66 +1486,110 @@ def main():
                 "or CSV location columns."
             )
 
-    # What's Being Discussed (Summarization)
-    with tab_discuss:
-        st.subheader("What's Being Discussed Now")
-        try:
-            if df is None or df.empty or "text" not in df.columns:
-                st.info("Not enough data to generate a summary. Load more posts.")
-            else:
-                dsum = df.copy()
-                timeframe_label = "All time"
-                if summarize_mode != "All Data" and "timestamp" in dsum.columns:
-                    try:
-                        dsum["_dt"] = pd.to_datetime(dsum["timestamp"], errors="coerce")
-                        now = pd.Timestamp.utcnow()
-                        if summarize_mode == "Last 1 Hour":
-                            cutoff = now - pd.Timedelta(hours=1)
-                            timeframe_label = "Last 1 hour"
+    # Subquery Search
+    with tab_subquery:
+        st.subheader("🔍 Advanced Subquery Search")
+        st.caption("Search using boolean operators: term1 term2 (required), -term3 (excluded), |term4 (optional)")
+        
+        search_col = st.columns([4, 2, 2])
+        with search_col[0]:
+            search_query = st.text_input(
+                "Search query",
+                value="trending",
+                placeholder="e.g., AI -hype |innovation",
+                help="Boolean syntax: required terms, -excluded, |optional"
+            )
+        with search_col[1]:
+            selected_platform = st.selectbox(
+                "Platform filter",
+                ["All"] + sorted(df["platform"].unique().tolist()) if "platform" in df.columns else ["All"],
+                index=0
+            )
+        with search_col[2]:
+            case_sensitive = st.checkbox("Case sensitive")
+        
+        if search_query.strip():
+            try:
+                search_engine = SubquerySearch(df)
+                results = search_engine.search_and_analyze(
+                    query=search_query,
+                    top_keywords=10,
+                    platform_filter=None if selected_platform == "All" else selected_platform
+                )
+                
+                if results["total_matches"] > 0:
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Matches found", results["total_matches"])
+                    c2.metric("Platforms", len(results["platforms"]) if results["platforms"] else 1)
+                    c3.metric("Top keywords", len(results["keywords"]) if results["keywords"] else 0)
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.subheader("Platform breakdown")
+                        if results["platforms"]:
+                            platform_df = pd.DataFrame(
+                                list(results["platforms"].items()),
+                                columns=["platform", "count"]
+                            ).sort_values("count", ascending=False)
+                            fig = plt.subplots(figsize=(5, 3))
+                            plt.bar(platform_df["platform"], platform_df["count"], color="#4e79a7")
+                            plt.xticks(rotation=45, ha="right")
+                            plt.title("Posts per platform (search results)")
+                            st.pyplot(fig[0], clear_figure=True)
                         else:
-                            cutoff = now - pd.Timedelta(hours=3)
-                            timeframe_label = "Last 3 hours"
-                        dsum = dsum.dropna(subset=["_dt"])
-                        dsum = dsum[dsum["_dt"] >= cutoff]
-                    except Exception:
-                        dsum = df.copy()
-                        timeframe_label = "All time"
-
-                if len(dsum) < 5:
-                    st.info("Not enough data to generate a summary. Load more posts.")
-                else:
-                    if st.button("🔄 Refresh Summary"):
-                        st.rerun()
-
-                    if not _HAS_SUMMARY:
-                        st.warning("Summary unavailable. Please check your data.")
-                    else:
-                        try:
-                            snap = generate_discussion_snapshot(dsum)
-                            snap["timeframe"] = timeframe_label
-                            c1, c2, c3 = st.columns(3)
-                            c1.metric("Posts summarized", str(snap.get("total_posts", len(dsum))))
-                            c2.metric("Timeframe", str(snap.get("timeframe", timeframe_label)))
-                            mix = snap.get("sentiment_mix", {}) or {}
-                            c3.metric(
-                                "Sentiment mix",
-                                f"+{mix.get('positive', 0)}% / ={mix.get('neutral', 0)}% / -{mix.get('negative', 0)}%",
+                            st.info("No platform breakdown available")
+                    
+                    with col2:
+                        st.subheader("Sentiment breakdown")
+                        if results["sentiment"]:
+                            sent_series = pd.Series(results["sentiment"])
+                            fig, ax = plt.subplots(figsize=(5, 3))
+                            colors = {"Positive": "#59a14f", "Neutral": "#bab0ac", "Negative": "#e15759"}
+                            ax.pie(
+                                sent_series.values,
+                                labels=sent_series.index,
+                                autopct=lambda p: f"{p:.0f}%",
+                                colors=[colors.get(l, "#999999") for l in sent_series.index]
                             )
+                            st.pyplot(fig, clear_figure=True)
+                        else:
+                            st.info("No sentiment breakdown available")
+                    
+                    st.subheader("Top keywords in results")
+                    if results["keywords"]:
+                        st.write(", ".join(results["keywords"]))
+                    
+                    st.subheader("Matching posts")
+                    results_to_show = results["results"][["text", "platform"]].copy()
+                    if "sentiment" in results_to_show.columns:
+                        results_to_show = results_to_show[["text", "platform", "sentiment"]]
+                    st.dataframe(results_to_show.head(50), use_container_width=True, height=400)
+                    
+                    # Export results
+                    csv_export = results["results"][["text", "platform"]].to_csv(index=False).encode("utf-8")
+                    st.download_button(
+                        "📥 Download search results",
+                        data=csv_export,
+                        file_name=f"search_results_{search_query.replace(' ', '_')}.csv",
+                        mime="text/csv"
+                    )
+                else:
+                    st.warning(f"No results found for query: {search_query}")
+                    
+                    st.subheader("Suggested searches")
+                    search_engine = SubquerySearch(df)
+                    suggestions = search_engine.trending_subqueries()
+                    if suggestions:
+                        st.write("Try one of these:")
+                        for suggestion in suggestions[:5]:
+                            if st.button(suggestion, key=f"suggest_{suggestion}"):
+                                st.rerun()
+            except Exception as e:
+                st.error(f"Search error: {str(e)}")
+        else:
+            st.info("Enter a search query to begin. Use boolean operators for advanced searches.")
 
-                            themes = snap.get("themes", []) or []
-                            if themes:
-                                st.caption("Themes")
-                                st.write(", ".join([str(t) for t in themes[:10]]))
-
-                            summary_text = (snap.get("summary") or "").strip()
-                            if summary_text:
-                                st.markdown(summary_text)
-                            else:
-                                st.warning("Summary unavailable. Please check your data.")
-                        except Exception:
-                            st.warning("Summary unavailable. Please check your data.")
-        except Exception:
-            st.warning("Summary unavailable. Please check your data.")
 
     # Footer
     st.markdown(

@@ -3,12 +3,12 @@
 Academic ML/NLP dashboard with **real-time data ingestion**, **time-based trend detection**, and **multi-platform support**.
 
 ## Features
-- **Trend detection**: hashtags, keyword frequency, TF‑IDF, LDA topics
-- **Sentiment**: VADER (Positive / Neutral / Negative)
-- **Multi-platform**: CSV upload, Reddit (PRAW), Twitter (Tweepy), SQLite collected data
-- **Real-time**: Collect Now button, scheduled collection script
-- **Time-based**: hourly/minute grouping, peak activity, trend growth rate
-- **Dashboard**: Overview, Trends, Sentiment, Topics (LDA), Real-Time Insights, Time-Based Trends, Platform Comparison
+- **Trend detection**: hashtags, keyword frequency, TF‑IDF, LDA topics + topic coherence (c_v)
+- **Sentiment**: VADER (Positive / Neutral / Negative), with optional TextBlob comparison
+- **Multi-source data**: Sample, Upload CSV, Quick Reddit, Quick X, Quick YouTube, Quick Instagram, Hacker News, News RSS, Load from collected
+- **Time-based**: hourly/minute grouping, peak activity, trend growth rate, trend velocity
+- **Dashboard**: Overview, Trends, Topics (LDA), Time Trends, Geographic, Search
+- **Build quality**: fallback to sample on failures, graceful API/error handling
 
 ## Files
 - `app.py`: Streamlit application
@@ -28,6 +28,13 @@ streamlit run app.py
 ```
 
 ---
+
+## Notes since refactor (March 2026)
+- Removed API-only sources from sidebar: `Fetch Reddit`, `Fetch Twitter`, `Fetch YouTube`, `Fetch Instagram`, `Global Trending`.
+- Added lightweight no-API sources: `Quick Reddit`, `Quick X`, `Quick YouTube`, `Quick Instagram`.
+- Added free sources: `Hacker News`, `News RSS`.
+- Merged `Sentiment`, `Real-Time Insights`, `Platform Comparison`, `What’s Being Discussed` into Overview/Trends/Topics tabs.
+- Added chart & analysis updates: Trend Velocity, VADER vs TextBlob, Topic Coherence (c_v), Dataset overview metrics.
 
 ## API credentials (optional)
 
